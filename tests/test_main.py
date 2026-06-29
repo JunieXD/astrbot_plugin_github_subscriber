@@ -275,6 +275,37 @@ async def test_ghsub_add_persists_subscription_and_reports_defaults(monkeypatch,
     ]
 
 
+async def test_ghsub_add_starts_poller_when_plugin_is_hot_loaded(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    plugin = module.GitHubSubscriberPlugin(module.Context(), module.AstrBotConfig({}))
+    created_coroutines: list[Any] = []
+
+    class FakeTask:
+        def __init__(self, coroutine: Any) -> None:
+            self.coroutine = coroutine
+            self.cancelled = False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+            self.coroutine.close()
+
+        def done(self) -> bool:
+            return False
+
+    def fake_create_task(coroutine: Any) -> FakeTask:
+        created_coroutines.append(coroutine)
+        return FakeTask(coroutine)
+
+    monkeypatch.setattr(module.asyncio, "create_task", fake_create_task)
+
+    await collect_plain_result(plugin.ghsub_add(FakeEvent("umo-a"), "Owner/Repo"))
+
+    assert len(created_coroutines) == 1
+    assert plugin._poller_task is not None
+    plugin._poller_task.cancel()
+
+
 async def test_ghsub_list_only_lists_current_target(monkeypatch, tmp_path):
     module = install_astrbot_stubs(monkeypatch)
     monkeypatch.chdir(tmp_path)
@@ -378,9 +409,6 @@ async def test_poll_loop_sends_rendered_subscription_messages(monkeypatch, tmp_p
         ]
 
     async def one_tick_sleep(_seconds: float):
-        if not hasattr(one_tick_sleep, "called"):
-            one_tick_sleep.called = True
-            return
         raise asyncio.CancelledError
 
     def fake_save() -> None:
@@ -404,6 +432,47 @@ async def test_poll_loop_sends_rendered_subscription_messages(monkeypatch, tmp_p
     assert chain.chain[1].text == "Issue 7: Hello"
     sub_state = plugin.state.get_subscription_state("umo-a", "Owner/Repo")
     assert sub_state["touched"] is True
+
+
+async def test_poll_loop_polls_once_before_first_sleep(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch, tmp_path / "plugin_data")
+    context = module.Context()
+    config = module.AstrBotConfig(
+        {
+            "message_limits": {"message_send_delay_seconds": 0},
+            "subscriptions": [
+                {
+                    "target_umo": "umo-a",
+                    "repo": "Owner/Repo",
+                    "enabled": True,
+                    "events": {"issue": True},
+                    "template_overrides": {"issue": "{title}"},
+                }
+            ],
+        }
+    )
+    plugin = module.GitHubSubscriberPlugin(context, config)
+    sleep_calls: list[float] = []
+
+    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+        state["touched_before_sleep"] = True
+        raise asyncio.CancelledError
+
+    async def fake_sleep(seconds: float):
+        sleep_calls.append(seconds)
+        raise AssertionError("poll loop should poll once before sleeping")
+
+    monkeypatch.setattr(module, "poll_subscription_once", fake_poll_subscription_once)
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+
+    try:
+        await plugin._poll_loop()
+    except asyncio.CancelledError:
+        pass
+
+    sub_state = plugin.state.get_subscription_state("umo-a", "Owner/Repo")
+    assert sub_state["touched_before_sleep"] is True
+    assert sleep_calls == []
 
 
 async def test_poll_loop_warns_and_continues_after_github_api_error(monkeypatch, tmp_path):

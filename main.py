@@ -81,9 +81,7 @@ class GitHubSubscriberPlugin(Star):
 
     @filter.on_astrbot_loaded()
     async def on_loaded(self):
-        if self._poller_task is None:
-            self._poller_task = asyncio.create_task(self._poll_loop())
-            logger.info("GitHub subscriber poller started.")
+        self._ensure_poller_started()
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @ghsub.command("help")
@@ -117,6 +115,7 @@ class GitHubSubscriberPlugin(Star):
             repo=repo,
         )
         self._persist_config()
+        self._ensure_poller_started()
         yield event.plain_result(
             f"已订阅 {sub['repo']}\n"
             "已开启：Release、Issue、PR\n"
@@ -160,6 +159,7 @@ class GitHubSubscriberPlugin(Star):
             return
         if remove_subscription(self.normalized_config, event.unified_msg_origin, repo):
             self._persist_config()
+            self._ensure_poller_started()
             yield event.plain_result(f"已移除订阅 {repo}")
         else:
             yield event.plain_result(f"当前会话未订阅 {repo}")
@@ -179,6 +179,7 @@ class GitHubSubscriberPlugin(Star):
 
         if changed:
             self._persist_config()
+            self._ensure_poller_started()
             yield event.plain_result(f"已开启 {repo} 的 {event_name} 提醒")
         else:
             yield event.plain_result(f"当前会话未订阅 {repo}")
@@ -198,13 +199,19 @@ class GitHubSubscriberPlugin(Star):
 
         if changed:
             self._persist_config()
+            self._ensure_poller_started()
             yield event.plain_result(f"已关闭 {repo} 的 {event_name} 提醒")
         else:
             yield event.plain_result(f"当前会话未订阅 {repo}")
 
+    def _ensure_poller_started(self) -> None:
+        if self._poller_task is not None and not self._poller_task.done():
+            return
+        self._poller_task = asyncio.create_task(self._poll_loop())
+        logger.info("GitHub subscriber poller started.")
+
     async def _poll_loop(self):
         while True:
-            await asyncio.sleep(60)
             async with GitHubClient(self.normalized_config.get("github_token", "")) as client:
                 for sub in list(self.normalized_config.get("subscriptions", [])):
                     if not sub.get("enabled", True):
@@ -233,6 +240,7 @@ class GitHubSubscriberPlugin(Star):
                         continue
 
                     self.state.save()
+            await asyncio.sleep(60)
 
     async def _send_subscription_messages(
         self,
