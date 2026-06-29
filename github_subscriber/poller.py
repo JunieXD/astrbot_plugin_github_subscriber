@@ -1,8 +1,21 @@
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Iterator
 
 from .messages import normalize_github_login
+
+
+@dataclass(frozen=True)
+class PrCollectionResult:
+    opened: list[dict[str, Any]]
+    merged: list[dict[str, Any]]
+    skipped_opened_count: int
+    skipped_merged_count: int
+
+    def __iter__(self) -> Iterator[list[dict[str, Any]]]:
+        yield self.opened
+        yield self.merged
 
 
 def collect_new_stars(
@@ -26,7 +39,11 @@ def collect_new_releases(
     state: dict[str, Any], releases: list[dict[str, Any]]
 ) -> tuple[dict[str, Any] | None, int]:
     seen = set(state.setdefault("notified_release_ids", []))
-    new_releases = [item for item in releases if item.get("id") not in seen]
+    new_releases = [
+        item
+        for item in releases
+        if item.get("id") is not None and item.get("id") not in seen
+    ]
     if not new_releases:
         return None, 0
     selected = sorted(
@@ -46,7 +63,9 @@ def collect_new_issues(
     candidates = [
         item
         for item in issues
-        if "pull_request" not in item and item.get("number") not in seen
+        if "pull_request" not in item
+        and item.get("number") is not None
+        and item.get("number") not in seen
     ]
     candidates.sort(key=lambda row: row.get("created_at") or "", reverse=True)
     for item in candidates:
@@ -60,11 +79,15 @@ def collect_new_prs(
     open_prs: list[dict[str, Any]],
     closed_prs: list[dict[str, Any]],
     limit: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> PrCollectionResult:
     seen_opened = set(state.setdefault("notified_pr_numbers", []))
     seen_merged = set(state.setdefault("notified_merged_pr_numbers", []))
 
-    opened = [item for item in open_prs if item.get("number") not in seen_opened]
+    opened = [
+        item
+        for item in open_prs
+        if item.get("number") is not None and item.get("number") not in seen_opened
+    ]
     opened.sort(key=lambda row: row.get("created_at") or "", reverse=True)
     for item in opened:
         state["notified_pr_numbers"].append(item["number"])
@@ -72,10 +95,17 @@ def collect_new_prs(
     merged = [
         item
         for item in closed_prs
-        if item.get("merged_at") and item.get("number") not in seen_merged
+        if item.get("merged_at")
+        and item.get("number") is not None
+        and item.get("number") not in seen_merged
     ]
     merged.sort(key=lambda row: row.get("merged_at") or "", reverse=True)
     for item in merged:
         state["notified_merged_pr_numbers"].append(item["number"])
 
-    return opened[:limit], merged[:limit]
+    return PrCollectionResult(
+        opened=opened[:limit],
+        merged=merged[:limit],
+        skipped_opened_count=max(0, len(opened) - limit),
+        skipped_merged_count=max(0, len(merged) - limit),
+    )
