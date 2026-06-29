@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .templates import render_template, truncate_text
+
+
+SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def resolve_template(config: dict[str, Any], sub: dict[str, Any], template_name: str) -> str:
@@ -48,7 +52,7 @@ def build_issue_variables(
         "number": item.get("number", ""),
         "title": item.get("title", ""),
         "author": (item.get("user") or {}).get("login", ""),
-        "created_at": item.get("created_at", ""),
+        "created_at": format_github_datetime(item.get("created_at", "")),
         "url": item.get("html_url", ""),
         "body_summary": truncate_text(item.get("body") or "", max_chars),
     }
@@ -67,3 +71,16 @@ def render_text_message(
 
 def normalize_github_login(login: str) -> str:
     return login.strip().lower()
+
+
+def format_github_datetime(value: Any) -> str:
+    if not value:
+        return ""
+    text = str(value)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(SHANGHAI_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")

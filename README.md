@@ -70,7 +70,7 @@
 - `{tag_name}`：Release tag
 - `{release_name}`：Release 名称，未填写时使用 tag
 - `{release_author}`：Release 作者 GitHub 用户名
-- `{release_time}`：Release 发布时间
+- `{release_time}`：Release 发布时间，默认上海时间，格式 `YYYY-MM-DD HH:MM:SS`
 - `{release_url}`：Release 链接
 - `{release_notes}`：Release note 内容，超过 `release_notes_max_chars` 会截断
 
@@ -79,14 +79,14 @@
 - `{number}`：Issue 或 PR 编号
 - `{title}`：标题
 - `{author}`：作者 GitHub 用户名
-- `{created_at}`：创建时间
+- `{created_at}`：创建时间，默认上海时间，格式 `YYYY-MM-DD HH:MM:SS`
 - `{url}`：Issue 或 PR 链接
 - `{body_summary}`：正文摘要，超过对应摘要长度限制会截断
 
 `pr_merged` 额外可使用：
 
 - `{merged_by}`：合并者 GitHub 用户名
-- `{merged_at}`：合并时间
+- `{merged_at}`：合并时间，默认上海时间，格式 `YYYY-MM-DD HH:MM:SS`
 - `{mention}`：命中 `github_to_qq` 映射时用于给 At 组件预留位置；未命中时为空
 
 ## 限流与发送

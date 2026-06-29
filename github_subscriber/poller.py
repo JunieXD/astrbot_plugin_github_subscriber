@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from .config import normalize_github_to_qq
-from .messages import build_issue_variables, build_star_variables, normalize_github_login
+from .messages import (
+    build_issue_variables,
+    build_star_variables,
+    format_github_datetime,
+    normalize_github_login,
+)
 from .models import EVENT_KEYS
 from .templates import truncate_text
 
@@ -194,7 +199,9 @@ def _release_variables(
             "tag_name": item.get("tag_name", ""),
             "release_name": item.get("name") or item.get("tag_name", ""),
             "release_author": (item.get("author") or {}).get("login", ""),
-            "release_time": item.get("published_at") or item.get("created_at") or "",
+            "release_time": format_github_datetime(
+                item.get("published_at") or item.get("created_at") or ""
+            ),
             "release_url": item.get("html_url", ""),
             "release_notes": truncate_text(item.get("body") or "", max_chars),
         }
@@ -211,7 +218,7 @@ def _pr_variables(
     variables.update(
         {
             "merged_by": (item.get("merged_by") or {}).get("login", ""),
-            "merged_at": item.get("merged_at") or "",
+            "merged_at": format_github_datetime(item.get("merged_at") or ""),
             "mention": "",
         }
     )

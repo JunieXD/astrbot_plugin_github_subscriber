@@ -1,7 +1,9 @@
 import github_subscriber.messages as messages
 from github_subscriber.config import normalize_config
 from github_subscriber.messages import (
+    build_issue_variables,
     build_star_variables,
+    format_github_datetime,
     normalize_github_login,
     resolve_template,
 )
@@ -72,9 +74,18 @@ def test_normalize_github_login_strips_and_lowercases():
     assert normalize_github_login(" Alice ") == "alice"
 
 
+def test_format_github_datetime_defaults_to_shanghai():
+    assert format_github_datetime("2026-06-29T18:07:55Z") == "2026-06-30 02:07:55"
+
+
+def test_format_github_datetime_keeps_invalid_values_readable():
+    assert format_github_datetime("not-a-time") == "not-a-time"
+    assert format_github_datetime("") == ""
+
+
 def test_build_issue_variables_truncates_body_summary():
     assert hasattr(messages, "build_issue_variables")
-    variables = messages.build_issue_variables(
+    variables = build_issue_variables(
         "Owner/Repo",
         {
             "number": 12,
@@ -95,7 +106,7 @@ def test_build_issue_variables_truncates_body_summary():
         "number": 12,
         "title": "Bug title",
         "author": "alice",
-        "created_at": "2026-06-01T00:00:00Z",
+        "created_at": "2026-06-01 08:00:00",
         "url": "https://github.com/Owner/Repo/issues/12",
         "body_summary": "abc...",
     }
