@@ -23,7 +23,7 @@ class GitHubClient:
         token: str = "",
         session: aiohttp.ClientSession | None = None,
     ):
-        self.token = token
+        self.token = token.strip()
         self._session = session
         self._owns_session = session is None
 

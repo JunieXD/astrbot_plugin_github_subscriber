@@ -105,6 +105,26 @@ async def test_get_issues_and_pulls_send_expected_params_without_token():
 
 
 @pytest.mark.asyncio
+async def test_token_is_stripped_before_authorization_header():
+    session = FakeSession([FakeResponse({"full_name": "Owner/Repo"})])
+    client = GitHubClient(token=" secret ", session=session)
+
+    assert await client.get_repo("Owner", "Repo") == {"full_name": "Owner/Repo"}
+
+    assert session.calls[0]["headers"]["Authorization"] == "Bearer secret"
+
+
+@pytest.mark.asyncio
+async def test_blank_token_does_not_send_authorization_header():
+    session = FakeSession([FakeResponse({"full_name": "Owner/Repo"})])
+    client = GitHubClient(token="   ", session=session)
+
+    assert await client.get_repo("Owner", "Repo") == {"full_name": "Owner/Repo"}
+
+    assert "Authorization" not in session.calls[0]["headers"]
+
+
+@pytest.mark.asyncio
 async def test_get_repo_returns_dict_and_rejects_non_dict_payload():
     ok_session = FakeSession([FakeResponse({"full_name": "Owner/Repo"})])
     ok_client = GitHubClient(session=ok_session)
