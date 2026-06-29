@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from .messages import build_issue_variables, build_star_variables, normalize_github_login
@@ -113,6 +114,38 @@ def collect_new_prs(
     )
 
 
+def initialize_baseline(
+    state: dict[str, Any],
+    *,
+    stargazers: list[dict[str, Any]],
+    releases: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
+    open_prs: list[dict[str, Any]],
+    closed_prs: list[dict[str, Any]],
+    now: str,
+) -> None:
+    state["initialized_at"] = now
+    state["known_star_users"] = [
+        (item.get("user") or {}).get("login", "")
+        for item in stargazers
+        if (item.get("user") or {}).get("login")
+    ]
+    state["notified_release_ids"] = [item["id"] for item in releases if "id" in item]
+    state["notified_issue_numbers"] = [
+        item["number"]
+        for item in issues
+        if "pull_request" not in item and "number" in item
+    ]
+    state["notified_pr_numbers"] = [
+        item["number"] for item in open_prs if "number" in item
+    ]
+    state["notified_merged_pr_numbers"] = [
+        item["number"]
+        for item in closed_prs
+        if item.get("merged_at") and "number" in item
+    ]
+
+
 def _repo_parts(repo: str) -> tuple[str, str]:
     return repo.split("/", 1)
 
@@ -199,6 +232,32 @@ async def poll_subscription_once(
     release_chars = int(limits.get("release_notes_max_chars", 1500))
     working_state = deepcopy(state)
     messages: list[dict[str, Any]] = []
+
+    if not working_state.get("initialized_at"):
+        stargazers = (
+            await client.get_stargazers(owner, name) if events.get("star") else []
+        )
+        releases = (
+            await client.get_releases(owner, name) if events.get("release") else []
+        )
+        issues = await client.get_issues(owner, name) if events.get("issue") else []
+        open_prs: list[dict[str, Any]] = []
+        closed_prs: list[dict[str, Any]] = []
+        if events.get("pr"):
+            open_prs = await client.get_pulls(owner, name, "open")
+            closed_prs = await client.get_pulls(owner, name, "closed")
+        initialize_baseline(
+            working_state,
+            stargazers=stargazers,
+            releases=releases,
+            issues=issues,
+            open_prs=open_prs,
+            closed_prs=closed_prs,
+            now=datetime.now(timezone.utc).isoformat(),
+        )
+        state.clear()
+        state.update(working_state)
+        return []
 
     if events.get("star"):
         stargazers = await client.get_stargazers(owner, name)
