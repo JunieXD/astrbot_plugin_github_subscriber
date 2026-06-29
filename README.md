@@ -50,10 +50,12 @@
 
 ## 限流与发送
 
+- 插件内部每 60 秒唤醒一次，但每个订阅项的 Star、Release、Issue、PR 会分别按各自配置的检查间隔判断是否需要请求 GitHub。
 - Issue 和 PR 每类事件每轮最多展示 `max_items_per_event_cycle` 条。
 - 超过展示上限的 Issue 或 PR 会发送 summary，超出部分会标记为已处理，后续不会补发。
 - Release 每轮只发送最新 1 个；同一轮发现的较旧 Release 会标记为已处理，后续不会补发。
 - 多条消息会按 `message_send_delay_seconds` 间隔逐条发送，避免短时间刷屏。
+- GitHub 请求或消息发送失败时，本轮该订阅项的状态会回滚，下轮满足间隔后重试。
 
 ## Baseline
 

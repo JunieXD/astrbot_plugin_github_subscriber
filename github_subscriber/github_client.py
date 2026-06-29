@@ -8,6 +8,7 @@ DEFAULT_ACCEPT = "application/vnd.github+json"
 STAR_ACCEPT = "application/vnd.github.star+json"
 GITHUB_API_VERSION = "2022-11-28"
 USER_AGENT = "astrbot-plugin-github-subscriber"
+REQUEST_TIMEOUT_SECONDS = 20
 
 
 class GitHubApiError(RuntimeError):
@@ -61,11 +62,12 @@ class GitHubClient:
         )
 
     async def get_pulls(self, owner: str, repo: str, state: str) -> list[Any]:
+        sort = "updated" if state == "closed" else "created"
         return await self._get_paginated(
             f"{API_BASE_URL}/repos/{owner}/{repo}/pulls",
             params={
                 "state": state,
-                "sort": "created",
+                "sort": sort,
                 "direction": "desc",
             },
         )
@@ -127,19 +129,26 @@ class GitHubClient:
             raise GitHubApiError(500, "Missing request URL")
 
         session = self._ensure_session()
-        async with session.get(
-            url,
-            headers=self._headers(accept),
-            params=params,
-        ) as response:
-            if response.status >= 400:
-                message = await response.text()
-                raise GitHubApiError(response.status, message[:500])
-            return await response.json(), response.links
+        try:
+            async with session.get(
+                url,
+                headers=self._headers(accept),
+                params=params,
+            ) as response:
+                if response.status >= 400:
+                    message = await response.text()
+                    raise GitHubApiError(response.status, message[:500])
+                return await response.json(), response.links
+        except GitHubApiError:
+            raise
+        except Exception as exc:
+            raise GitHubApiError(0, str(exc) or exc.__class__.__name__) from exc
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
+            )
             self._owns_session = True
         return self._session
 

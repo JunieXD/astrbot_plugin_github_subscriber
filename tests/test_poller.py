@@ -5,6 +5,7 @@ from github_subscriber.poller import (
     collect_new_stars,
     initialize_baseline,
 )
+from datetime import datetime, timezone
 
 
 class FakeGitHubClient:
@@ -59,6 +60,12 @@ def subscription(events: dict[str, bool] | None = None) -> dict:
         "target_umo": "aiocqhttp:GroupMessage:100",
         "repo": "Owner/Repo",
         "events": events or {"star": False, "release": False, "issue": False, "pr": False},
+        "intervals": {
+            "star_minutes": 1,
+            "release_minutes": 5,
+            "issue_minutes": 2,
+            "pr_minutes": 2,
+        },
     }
 
 
@@ -283,6 +290,124 @@ async def test_poll_subscription_once_adds_issue_limit_summary():
     )
     assert messages[2]["mention_qq"] == ""
     assert client.calls == [("get_issues", "Owner", "Repo")]
+
+
+async def test_poll_subscription_once_respects_per_event_intervals():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.releases = [
+        {
+            "id": 10,
+            "tag_name": "v1.0.0",
+            "published_at": "2026-06-29T00:01:00Z",
+        }
+    ]
+    state = initialized_state(
+        notified_release_ids=[],
+        last_checked_at={"release": "2026-06-29T00:00:00+00:00"},
+        event_enabled={"release": True},
+    )
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        subscription({"release": True}),
+        state,
+        now=datetime(2026, 6, 29, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert messages == []
+    assert client.calls == []
+    assert state["notified_release_ids"] == []
+
+
+async def test_poll_subscription_once_marks_checked_when_interval_elapsed():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.releases = [
+        {
+            "id": 10,
+            "tag_name": "v1.0.0",
+            "published_at": "2026-06-29T00:05:00Z",
+        }
+    ]
+    state = initialized_state(
+        notified_release_ids=[],
+        last_checked_at={"release": "2026-06-29T00:00:00+00:00"},
+        event_enabled={"release": True},
+    )
+    now = datetime(2026, 6, 29, 0, 5, 1, tzinfo=timezone.utc)
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        subscription({"release": True}),
+        state,
+        now=now,
+    )
+
+    assert [message["template_name"] for message in messages] == ["release"]
+    assert client.calls == [("get_releases", "Owner", "Repo")]
+    assert state["last_checked_at"]["release"] == now.isoformat()
+
+
+async def test_poll_subscription_once_baselines_reenabled_event_without_backlog():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.issues = [
+        {
+            "number": 10,
+            "title": "Issue while disabled",
+            "user": {"login": "alice"},
+            "created_at": "2026-06-29T00:03:00Z",
+            "html_url": "https://github.com/Owner/Repo/issues/10",
+            "body": "body",
+        }
+    ]
+    state = initialized_state(
+        notified_issue_numbers=[],
+        last_checked_at={"issue": "2026-06-29T00:00:00+00:00"},
+        event_enabled={"issue": False},
+    )
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        subscription({"issue": True}),
+        state,
+        now=datetime(2026, 6, 29, 0, 10, tzinfo=timezone.utc),
+    )
+
+    assert messages == []
+    assert client.calls == [("get_issues", "Owner", "Repo")]
+    assert state["notified_issue_numbers"] == [10]
+    assert state["event_enabled"]["issue"] is True
+
+
+async def test_initial_baseline_records_current_event_switches():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    state = {}
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        subscription({"star": False, "release": True, "issue": True, "pr": True}),
+        state,
+        now=datetime(2026, 6, 29, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert messages == []
+    assert state["event_enabled"] == {
+        "star": False,
+        "release": True,
+        "issue": True,
+        "pr": True,
+    }
 
 
 async def test_poll_subscription_once_does_not_mutate_state_when_later_api_fails():
@@ -595,14 +720,9 @@ async def test_poll_subscription_once_baselines_disabled_events_before_star_is_e
         state,
     )
 
-    assert [message["template_name"] for message in messages] == ["star"]
-    assert messages[0]["variables"]["new_star_count"] == 1
-    assert messages[0]["variables"]["star_users"] == "bob"
+    assert messages == []
     assert state["known_star_users"] == ["alice", "bob"]
-    assert client.calls == [
-        ("get_stargazers", "Owner", "Repo"),
-        ("get_repo", "Owner", "Repo"),
-    ]
+    assert client.calls == [("get_stargazers", "Owner", "Repo")]
 
 
 async def test_poll_subscription_once_pr_merged_mentions_mapped_author():

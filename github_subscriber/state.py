@@ -13,6 +13,7 @@ DEFAULT_SUBSCRIPTION_STATE = {
     "notified_issue_numbers": [],
     "notified_pr_numbers": [],
     "notified_merged_pr_numbers": [],
+    "event_enabled": {"star": False, "release": False, "issue": False, "pr": False},
     "last_checked_at": {"star": "", "release": "", "issue": "", "pr": ""},
     "etag": {"star": "", "release": "", "issue": "", "pr": ""},
 }

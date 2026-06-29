@@ -24,7 +24,7 @@ from github_subscriber.config import (
     normalize_config,
     remove_subscription,
 )
-from github_subscriber.github_client import GitHubApiError, GitHubClient
+from github_subscriber.github_client import GitHubClient
 from github_subscriber.messages import render_text_message
 from github_subscriber.models import EVENT_KEYS
 from github_subscriber.poller import poll_subscription_once
@@ -198,17 +198,17 @@ class GitHubSubscriberPlugin(Star):
                             sub,
                             sub_state,
                         )
-                    except GitHubApiError as exc:
+                        await self._send_subscription_messages(sub, messages)
+                    except Exception as exc:
                         sub_state.clear()
                         sub_state.update(state_before_poll)
                         logger.warning(
-                            "GitHub polling failed for %s: %s",
+                            "GitHub subscriber failed for %s: %s",
                             sub.get("repo"),
                             exc,
                         )
                         continue
 
-                    await self._send_subscription_messages(sub, messages)
                     self.state.save()
 
     async def _send_subscription_messages(
@@ -254,16 +254,15 @@ class GitHubSubscriberPlugin(Star):
 
 
 def _build_message_chain(text: str, mention_qq: str | None = "") -> MessageChain:
-    chain = MessageChain()
     if mention_qq:
-        at_component = Comp.At(qq=str(mention_qq))
-        if hasattr(chain, "chain"):
-            chain.chain.append(at_component)
-        else:
-            try:
-                return MessageChain([at_component, Comp.Plain(text)])
-            except Exception:
-                pass
+        try:
+            return MessageChain([Comp.At(qq=str(mention_qq)), Comp.Plain(text)])
+        except TypeError:
+            chain = MessageChain()
+            chain.message(text)
+            return chain
+
+    chain = MessageChain()
     if hasattr(chain, "message"):
         chain.message(text)
     elif hasattr(chain, "chain"):

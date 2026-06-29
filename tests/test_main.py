@@ -105,8 +105,11 @@ def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
     class Context:
         def __init__(self) -> None:
             self.sent_messages: list[tuple[str, Any]] = []
+            self.fail_send = False
 
         async def send_message(self, target_umo: str, chain: Any) -> None:
+            if self.fail_send:
+                raise RuntimeError("send failed")
             self.sent_messages.append((target_umo, chain))
 
     class Star:
@@ -332,7 +335,7 @@ async def test_poll_loop_sends_rendered_subscription_messages(monkeypatch, tmp_p
     target_umo, chain = context.sent_messages[0]
     assert target_umo == "umo-a"
     assert chain.chain[0].qq == "10001"
-    assert chain.chain[1] == "Issue 7: Hello"
+    assert chain.chain[1].text == "Issue 7: Hello"
     sub_state = plugin.state.get_subscription_state("umo-a", "Owner/Repo")
     assert sub_state["touched"] is True
 
@@ -368,6 +371,126 @@ async def test_poll_loop_warns_and_continues_after_github_api_error(monkeypatch,
         if sub["repo"] == "Owner/Fail":
             state["notified_issue_numbers"] = [99]
             raise module.GitHubApiError(500, "boom")
+        return [
+            {
+                "target_umo": sub["target_umo"],
+                "template_name": "_raw",
+                "variables": {"text": f"{sub['repo']} ok"},
+                "mention_qq": "",
+            }
+        ]
+
+    async def one_tick_sleep(_seconds: float):
+        if not hasattr(one_tick_sleep, "called"):
+            one_tick_sleep.called = True
+            return
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(module, "poll_subscription_once", fake_poll_subscription_once)
+    monkeypatch.setattr(module.asyncio, "sleep", one_tick_sleep)
+
+    try:
+        await plugin._poll_loop()
+    except asyncio.CancelledError:
+        pass
+
+    assert context.sent_messages[0][0] == "umo-b"
+    assert context.sent_messages[0][1].chain == ["Owner/Ok ok"]
+    assert module.logger.warnings
+    assert "Owner/Fail" in module.logger.warnings[0][1]
+    failed_state = plugin.state.get_subscription_state("umo-a", "Owner/Fail")
+    assert failed_state["notified_issue_numbers"] == []
+
+
+async def test_poll_loop_rolls_back_state_when_send_fails(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch, tmp_path / "plugin_data")
+    context = module.Context()
+    context.fail_send = True
+    config = module.AstrBotConfig(
+        {
+            "message_limits": {"message_send_delay_seconds": 0},
+            "subscriptions": [
+                {
+                    "target_umo": "umo-a",
+                    "repo": "Owner/Repo",
+                    "enabled": True,
+                    "events": {"issue": True},
+                    "template_overrides": {},
+                }
+            ],
+        }
+    )
+    plugin = module.GitHubSubscriberPlugin(context, config)
+    save_count = 0
+
+    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+        state["notified_issue_numbers"] = [99]
+        return [
+            {
+                "target_umo": sub["target_umo"],
+                "template_name": "_raw",
+                "variables": {"text": "should send"},
+                "mention_qq": "",
+            }
+        ]
+
+    async def one_tick_sleep(_seconds: float):
+        if not hasattr(one_tick_sleep, "called"):
+            one_tick_sleep.called = True
+            return
+        raise asyncio.CancelledError
+
+    def fake_save() -> None:
+        nonlocal save_count
+        save_count += 1
+
+    monkeypatch.setattr(module, "poll_subscription_once", fake_poll_subscription_once)
+    monkeypatch.setattr(module.asyncio, "sleep", one_tick_sleep)
+    monkeypatch.setattr(plugin.state, "save", fake_save)
+
+    try:
+        await plugin._poll_loop()
+    except asyncio.CancelledError:
+        pass
+
+    assert save_count == 0
+    assert module.logger.warnings
+    assert "send failed" in str(module.logger.warnings[0])
+    sub_state = plugin.state.get_subscription_state("umo-a", "Owner/Repo")
+    assert sub_state["notified_issue_numbers"] == []
+
+
+async def test_poll_loop_treats_unexpected_poll_errors_as_recoverable(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch, tmp_path / "plugin_data")
+    context = module.Context()
+    config = module.AstrBotConfig(
+        {
+            "message_limits": {"message_send_delay_seconds": 0},
+            "global_templates": {"issue": "{title}"},
+            "subscriptions": [
+                {
+                    "target_umo": "umo-a",
+                    "repo": "Owner/Fail",
+                    "enabled": True,
+                    "events": {"issue": True},
+                    "template_overrides": {},
+                },
+                {
+                    "target_umo": "umo-b",
+                    "repo": "Owner/Ok",
+                    "enabled": True,
+                    "events": {"issue": True},
+                    "template_overrides": {},
+                },
+            ],
+        }
+    )
+    plugin = module.GitHubSubscriberPlugin(context, config)
+
+    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+        if sub["repo"] == "Owner/Fail":
+            state["notified_issue_numbers"] = [99]
+            raise RuntimeError("network reset")
         return [
             {
                 "target_umo": sub["target_umo"],

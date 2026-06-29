@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from .messages import build_issue_variables, build_star_variables, normalize_github_login
+from .models import EVENT_KEYS
 from .templates import truncate_text
 
 
@@ -122,6 +123,7 @@ def initialize_baseline(
     issues: list[dict[str, Any]],
     open_prs: list[dict[str, Any]],
     closed_prs: list[dict[str, Any]],
+    events: dict[str, bool] | None = None,
     now: str,
 ) -> None:
     state["initialized_at"] = now
@@ -146,6 +148,8 @@ def initialize_baseline(
         for item in closed_prs
         if item.get("merged_at") and item.get("number") is not None
     ]
+    events = events or {}
+    state["event_enabled"] = {key: bool(events.get(key)) for key in EVENT_KEYS}
 
 
 def _repo_parts(repo: str) -> tuple[str, str]:
@@ -217,16 +221,111 @@ def _summary_message(
     }
 
 
+def _parse_checked_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        checked_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if checked_at.tzinfo is None:
+        return checked_at.replace(tzinfo=timezone.utc)
+    return checked_at.astimezone(timezone.utc)
+
+
+def _event_interval_seconds(
+    config: dict[str, Any],
+    sub: dict[str, Any],
+    event_name: str,
+) -> int:
+    defaults = config.get("default_intervals") or {}
+    intervals = {**defaults, **(sub.get("intervals") or {})}
+    min_seconds = int(defaults.get("min_interval_seconds", 60) or 60)
+    minutes = int(intervals.get(f"{event_name}_minutes", 1) or 1)
+    return max(minutes * 60, min_seconds)
+
+
+def _event_is_due(
+    working_state: dict[str, Any],
+    config: dict[str, Any],
+    sub: dict[str, Any],
+    event_name: str,
+    now: datetime,
+) -> bool:
+    last_checked = (working_state.get("last_checked_at") or {}).get(event_name)
+    checked_at = _parse_checked_at(last_checked)
+    if checked_at is None:
+        return True
+    elapsed = (now - checked_at).total_seconds()
+    return elapsed >= _event_interval_seconds(config, sub, event_name)
+
+
+def _mark_checked(working_state: dict[str, Any], event_name: str, now: datetime) -> None:
+    working_state.setdefault("last_checked_at", {})[event_name] = now.isoformat()
+
+
+def _previously_enabled(working_state: dict[str, Any], event_name: str) -> bool:
+    event_enabled = working_state.get("event_enabled")
+    if not isinstance(event_enabled, dict):
+        return True
+    return bool(event_enabled.get(event_name, True))
+
+
+def _mark_event_enabled(working_state: dict[str, Any], event_name: str, enabled: bool) -> None:
+    working_state.setdefault("event_enabled", {})[event_name] = enabled
+
+
+def _baseline_stars(working_state: dict[str, Any], stargazers: list[dict[str, Any]]) -> None:
+    working_state["known_star_users"] = [
+        (item.get("user") or {}).get("login", "")
+        for item in stargazers
+        if (item.get("user") or {}).get("login")
+    ]
+
+
+def _baseline_releases(working_state: dict[str, Any], releases: list[dict[str, Any]]) -> None:
+    working_state["notified_release_ids"] = [
+        item["id"] for item in releases if item.get("id") is not None
+    ]
+
+
+def _baseline_issues(working_state: dict[str, Any], issues: list[dict[str, Any]]) -> None:
+    working_state["notified_issue_numbers"] = [
+        item["number"]
+        for item in issues
+        if "pull_request" not in item and item.get("number") is not None
+    ]
+
+
+def _baseline_prs(
+    working_state: dict[str, Any],
+    *,
+    open_prs: list[dict[str, Any]],
+    closed_prs: list[dict[str, Any]],
+) -> None:
+    working_state["notified_pr_numbers"] = [
+        item["number"] for item in open_prs if item.get("number") is not None
+    ]
+    working_state["notified_merged_pr_numbers"] = [
+        item["number"]
+        for item in closed_prs
+        if item.get("merged_at") and item.get("number") is not None
+    ]
+
+
 async def poll_subscription_once(
     client: Any,
     config: dict[str, Any],
     sub: dict[str, Any],
     state: dict[str, Any],
+    *,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     repo = sub["repo"]
     owner, name = _repo_parts(repo)
     target_umo = sub["target_umo"]
     events = sub.get("events") or {}
+    now = now or datetime.now(timezone.utc)
     limits = config.get("message_limits") or {}
     max_items = int(limits.get("max_items_per_event_cycle", 5))
     issue_chars = int(limits.get("issue_body_summary_chars", 300))
@@ -248,122 +347,172 @@ async def poll_subscription_once(
             issues=issues,
             open_prs=open_prs,
             closed_prs=closed_prs,
-            now=datetime.now(timezone.utc).isoformat(),
+            events=events,
+            now=now.isoformat(),
         )
         state.clear()
         state.update(working_state)
         return []
 
     if events.get("star"):
-        stargazers = await client.get_stargazers(owner, name)
-        repo_meta = await client.get_repo(owner, name)
-        new_users = collect_new_stars(working_state, stargazers)
-        if new_users:
-            messages.append(
-                {
-                    "target_umo": target_umo,
-                    "template_name": "star",
-                    "variables": build_star_variables(
-                        repo=repo,
-                        repo_url=f"https://github.com/{repo}",
-                        star_count=int(repo_meta.get("stargazers_count") or 0),
-                        new_users=new_users,
-                    ),
-                    "mention_qq": "",
-                }
-            )
+        if not _event_is_due(working_state, config, sub, "star", now):
+            _mark_event_enabled(working_state, "star", True)
+        elif not _previously_enabled(working_state, "star"):
+            stargazers = await client.get_stargazers(owner, name)
+            _baseline_stars(working_state, stargazers)
+            _mark_checked(working_state, "star", now)
+            _mark_event_enabled(working_state, "star", True)
+        else:
+            stargazers = await client.get_stargazers(owner, name)
+            repo_meta = await client.get_repo(owner, name)
+            new_users = collect_new_stars(working_state, stargazers)
+            if new_users:
+                messages.append(
+                    {
+                        "target_umo": target_umo,
+                        "template_name": "star",
+                        "variables": build_star_variables(
+                            repo=repo,
+                            repo_url=f"https://github.com/{repo}",
+                            star_count=int(repo_meta.get("stargazers_count") or 0),
+                            new_users=new_users,
+                        ),
+                        "mention_qq": "",
+                    }
+                )
+            _mark_checked(working_state, "star", now)
+            _mark_event_enabled(working_state, "star", True)
+    else:
+        _mark_event_enabled(working_state, "star", False)
 
     if events.get("release"):
-        releases = await client.get_releases(owner, name)
-        selected_release, _skipped_count = collect_new_releases(working_state, releases)
-        if selected_release:
-            messages.append(
-                {
-                    "target_umo": target_umo,
-                    "template_name": "release",
-                    "variables": _release_variables(repo, selected_release, release_chars),
-                    "mention_qq": "",
-                }
-            )
+        if not _event_is_due(working_state, config, sub, "release", now):
+            _mark_event_enabled(working_state, "release", True)
+        elif not _previously_enabled(working_state, "release"):
+            releases = await client.get_releases(owner, name)
+            _baseline_releases(working_state, releases)
+            _mark_checked(working_state, "release", now)
+            _mark_event_enabled(working_state, "release", True)
+        else:
+            releases = await client.get_releases(owner, name)
+            selected_release, _skipped_count = collect_new_releases(working_state, releases)
+            if selected_release:
+                messages.append(
+                    {
+                        "target_umo": target_umo,
+                        "template_name": "release",
+                        "variables": _release_variables(repo, selected_release, release_chars),
+                        "mention_qq": "",
+                    }
+                )
+            _mark_checked(working_state, "release", now)
+            _mark_event_enabled(working_state, "release", True)
+    else:
+        _mark_event_enabled(working_state, "release", False)
 
     if events.get("issue"):
-        issues = await client.get_issues(owner, name)
-        selected_issues, skipped_count = collect_new_issues(
-            working_state,
-            issues,
-            limit=max_items,
-        )
-        for item in selected_issues:
-            messages.append(
-                {
-                    "target_umo": target_umo,
-                    "template_name": "issue",
-                    "variables": build_issue_variables(repo, item, issue_chars),
-                    "mention_qq": "",
-                }
+        if not _event_is_due(working_state, config, sub, "issue", now):
+            _mark_event_enabled(working_state, "issue", True)
+        elif not _previously_enabled(working_state, "issue"):
+            issues = await client.get_issues(owner, name)
+            _baseline_issues(working_state, issues)
+            _mark_checked(working_state, "issue", now)
+            _mark_event_enabled(working_state, "issue", True)
+        else:
+            issues = await client.get_issues(owner, name)
+            selected_issues, skipped_count = collect_new_issues(
+                working_state,
+                issues,
+                limit=max_items,
             )
-        if skipped_count:
-            messages.append(
-                _summary_message(target_umo, repo, "Issue", max_items, skipped_count)
-            )
+            for item in selected_issues:
+                messages.append(
+                    {
+                        "target_umo": target_umo,
+                        "template_name": "issue",
+                        "variables": build_issue_variables(repo, item, issue_chars),
+                        "mention_qq": "",
+                    }
+                )
+            if skipped_count:
+                messages.append(
+                    _summary_message(target_umo, repo, "Issue", max_items, skipped_count)
+                )
+            _mark_checked(working_state, "issue", now)
+            _mark_event_enabled(working_state, "issue", True)
+    else:
+        _mark_event_enabled(working_state, "issue", False)
 
     if events.get("pr"):
-        open_prs = await client.get_pulls(owner, name, "open")
-        closed_prs = await client.get_pulls(owner, name, "closed")
-        result = collect_new_prs(
-            working_state,
-            open_prs=open_prs,
-            closed_prs=closed_prs,
-            limit=max_items,
-        )
-
-        for item in result.opened:
-            messages.append(
-                {
-                    "target_umo": target_umo,
-                    "template_name": "pr_opened",
-                    "variables": _pr_variables(repo, item, pr_chars),
-                    "mention_qq": "",
-                }
-            )
-        if result.skipped_opened_count:
-            messages.append(
-                _summary_message(
-                    target_umo,
-                    repo,
-                    "PR",
-                    max_items,
-                    result.skipped_opened_count,
-                )
+        if not _event_is_due(working_state, config, sub, "pr", now):
+            _mark_event_enabled(working_state, "pr", True)
+        elif not _previously_enabled(working_state, "pr"):
+            open_prs = await client.get_pulls(owner, name, "open")
+            closed_prs = await client.get_pulls(owner, name, "closed")
+            _baseline_prs(working_state, open_prs=open_prs, closed_prs=closed_prs)
+            _mark_checked(working_state, "pr", now)
+            _mark_event_enabled(working_state, "pr", True)
+        else:
+            open_prs = await client.get_pulls(owner, name, "open")
+            closed_prs = await client.get_pulls(owner, name, "closed")
+            result = collect_new_prs(
+                working_state,
+                open_prs=open_prs,
+                closed_prs=closed_prs,
+                limit=max_items,
             )
 
-        github_to_qq = {
-            normalize_github_login(login): str(qq)
-            for login, qq in (config.get("github_to_qq") or {}).items()
-        }
-        for item in result.merged:
-            variables = _pr_variables(repo, item, pr_chars)
-            author_login = normalize_github_login(variables.get("author", ""))
-            mention_qq = github_to_qq.get(author_login, "")
-            variables["mention"] = " " if mention_qq else ""
-            messages.append(
-                {
-                    "target_umo": target_umo,
-                    "template_name": "pr_merged",
-                    "variables": variables,
-                    "mention_qq": mention_qq,
-                }
-            )
-        if result.skipped_merged_count:
-            messages.append(
-                _summary_message(
-                    target_umo,
-                    repo,
-                    "已合并 PR",
-                    max_items,
-                    result.skipped_merged_count,
+            for item in result.opened:
+                messages.append(
+                    {
+                        "target_umo": target_umo,
+                        "template_name": "pr_opened",
+                        "variables": _pr_variables(repo, item, pr_chars),
+                        "mention_qq": "",
+                    }
                 )
-            )
+            if result.skipped_opened_count:
+                messages.append(
+                    _summary_message(
+                        target_umo,
+                        repo,
+                        "PR",
+                        max_items,
+                        result.skipped_opened_count,
+                    )
+                )
+
+            github_to_qq = {
+                normalize_github_login(login): str(qq)
+                for login, qq in (config.get("github_to_qq") or {}).items()
+            }
+            for item in result.merged:
+                variables = _pr_variables(repo, item, pr_chars)
+                author_login = normalize_github_login(variables.get("author", ""))
+                mention_qq = github_to_qq.get(author_login, "")
+                variables["mention"] = " " if mention_qq else ""
+                messages.append(
+                    {
+                        "target_umo": target_umo,
+                        "template_name": "pr_merged",
+                        "variables": variables,
+                        "mention_qq": mention_qq,
+                    }
+                )
+            if result.skipped_merged_count:
+                messages.append(
+                    _summary_message(
+                        target_umo,
+                        repo,
+                        "已合并 PR",
+                        max_items,
+                        result.skipped_merged_count,
+                    )
+                )
+            _mark_checked(working_state, "pr", now)
+            _mark_event_enabled(working_state, "pr", True)
+    else:
+        _mark_event_enabled(working_state, "pr", False)
 
     state.clear()
     state.update(working_state)

@@ -42,6 +42,16 @@ class FakeSession:
         self.closed = True
 
 
+class FailingSession:
+    def __init__(self, exc):
+        self.exc = exc
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        raise self.exc
+
+
 @pytest.mark.asyncio
 async def test_get_stargazers_uses_star_accept_token_and_merges_pages():
     session = FakeSession(
@@ -81,10 +91,11 @@ async def test_get_stargazers_uses_star_accept_token_and_merges_pages():
 
 @pytest.mark.asyncio
 async def test_get_issues_and_pulls_send_expected_params_without_token():
-    session = FakeSession([FakeResponse([]), FakeResponse([])])
+    session = FakeSession([FakeResponse([]), FakeResponse([]), FakeResponse([])])
     client = GitHubClient(session=session)
 
     assert await client.get_issues("Owner", "Repo") == []
+    assert await client.get_pulls("Owner", "Repo", "open") == []
     assert await client.get_pulls("Owner", "Repo", "closed") == []
 
     assert session.calls[0]["url"] == "https://api.github.com/repos/Owner/Repo/issues"
@@ -97,8 +108,15 @@ async def test_get_issues_and_pulls_send_expected_params_without_token():
     assert "Authorization" not in session.calls[0]["headers"]
     assert session.calls[1]["url"] == "https://api.github.com/repos/Owner/Repo/pulls"
     assert session.calls[1]["params"] == {
-        "state": "closed",
+        "state": "open",
         "sort": "created",
+        "direction": "desc",
+        "per_page": 100,
+    }
+    assert session.calls[2]["url"] == "https://api.github.com/repos/Owner/Repo/pulls"
+    assert session.calls[2]["params"] == {
+        "state": "closed",
+        "sort": "updated",
         "direction": "desc",
         "per_page": 100,
     }
@@ -166,3 +184,15 @@ async def test_paginated_endpoint_rejects_non_list_payload():
 
     assert exc_info.value.status == 500
     assert exc_info.value.message == "Expected list response"
+
+
+@pytest.mark.asyncio
+async def test_request_errors_are_wrapped_as_github_api_error():
+    session = FailingSession(RuntimeError("connection reset"))
+    client = GitHubClient(session=session)
+
+    with pytest.raises(GitHubApiError) as exc_info:
+        await client.get_repo("Owner", "Repo")
+
+    assert exc_info.value.status == 0
+    assert exc_info.value.message == "connection reset"
