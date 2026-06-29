@@ -761,6 +761,42 @@ async def test_poll_subscription_once_pr_merged_mentions_mapped_author():
     ]
 
 
+async def test_poll_subscription_once_pr_merged_mentions_template_list_mapping():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.pulls["closed"] = [
+        {
+            "number": 8,
+            "title": "Merged PR",
+            "user": {"login": "Alice"},
+            "created_at": "2026-06-01T00:00:00Z",
+            "merged_at": "2026-06-02T00:00:00Z",
+            "merged_by": {"login": "maintainer"},
+            "html_url": "https://github.com/Owner/Repo/pull/8",
+            "body": "body",
+        }
+    ]
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(
+            github_to_qq=[
+                {
+                    "__template_key": "mapping",
+                    "github_login": "alice",
+                    "qq_uid": "10001",
+                }
+            ]
+        ),
+        subscription({"pr": True}),
+        initialized_state(notified_pr_numbers=[], notified_merged_pr_numbers=[]),
+    )
+
+    assert [message["template_name"] for message in messages] == ["pr_merged"]
+    assert messages[0]["mention_qq"] == "10001"
+
+
 async def test_poll_subscription_once_skips_disabled_event_apis():
     from github_subscriber import poller
 

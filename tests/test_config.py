@@ -25,6 +25,39 @@ def test_normalize_config_adds_defaults():
     assert config["subscriptions"] == []
 
 
+def test_normalize_config_accepts_github_to_qq_template_list():
+    config = normalize_config(
+        {
+            "github_to_qq": [
+                {
+                    "__template_key": "mapping",
+                    "github_login": "Alice",
+                    "qq_uid": "10001",
+                },
+                {
+                    "github_login": "bob",
+                    "qq_uid": 10002,
+                },
+                {
+                    "github_login": "",
+                    "qq_uid": "ignored",
+                },
+            ]
+        }
+    )
+
+    assert config["github_to_qq"] == {
+        "Alice": "10001",
+        "bob": "10002",
+    }
+
+
+def test_normalize_config_keeps_legacy_github_to_qq_dict():
+    config = normalize_config({"github_to_qq": {"Alice": 10001}})
+
+    assert config["github_to_qq"] == {"Alice": "10001"}
+
+
 def test_add_subscription_defaults_events_and_target():
     config = normalize_config({})
     sub = add_subscription(

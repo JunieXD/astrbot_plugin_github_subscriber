@@ -87,9 +87,13 @@ repo: JunieXD/AutoEmailSender
     "max_items_per_event_cycle": 5,
     "message_send_delay_seconds": 1
   },
-  "github_to_qq": {
-    "juniexd": "123456789"
-  },
+  "github_to_qq": [
+    {
+      "__template_key": "mapping",
+      "github_login": "juniexd",
+      "qq_uid": "123456789"
+    }
+  ],
   "global_templates": {
     "star": "{repo} 新增 {new_star_count} 个 Star\n当前总 Star：{star_count}\n用户：{star_users}",
     "release": "{repo} 发布了 {tag_name}\n{release_name}\n{release_url}\n\n{release_notes}",

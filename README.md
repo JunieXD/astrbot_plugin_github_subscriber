@@ -42,7 +42,7 @@
 主要配置项：
 
 - `github_token`：可选 GitHub token。公开 GitHub API 不配置 token 也可以使用，但限流较低；建议配置 token 提高稳定性。
-- `github_to_qq`：GitHub 用户名到 QQ UID 的映射，用于 PR 合并提醒时 @ PR 作者。用户名匹配不区分大小写。
+- `github_to_qq`：GitHub 用户名到 QQ UID 的映射列表，用于 PR 合并提醒时 @ PR 作者。用户名匹配不区分大小写。
 - `global_templates`：全局默认消息模板，支持 `star`、`release`、`issue`、`pr_opened`、`pr_merged`。
 - `subscriptions`：订阅列表。每条订阅包含目标会话 `target_umo`、仓库 `repo`、启用状态、事件开关、轮询间隔和 `template_overrides`。
 

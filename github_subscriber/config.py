@@ -51,6 +51,28 @@ DEFAULT_TEMPLATE_OVERRIDES = {
 }
 
 
+def normalize_github_to_qq(value: Any) -> dict[str, str]:
+    if isinstance(value, dict):
+        return {
+            str(login): str(qq)
+            for login, qq in value.items()
+            if str(login).strip() and str(qq).strip()
+        }
+
+    if isinstance(value, list):
+        mappings: dict[str, str] = {}
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            login = str(item.get("github_login", "")).strip()
+            qq_uid = str(item.get("qq_uid", "")).strip()
+            if login and qq_uid:
+                mappings[login] = qq_uid
+        return mappings
+
+    return {}
+
+
 def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
     config = deepcopy(DEFAULT_CONFIG)
     raw = raw or {}
@@ -62,6 +84,7 @@ def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
             config[key] = deepcopy(value)
 
     config["subscriptions"] = list(config.get("subscriptions") or [])
+    config["github_to_qq"] = normalize_github_to_qq(config.get("github_to_qq"))
     return config
 
 

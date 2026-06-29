@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
+from .config import normalize_github_to_qq
 from .messages import build_issue_variables, build_star_variables, normalize_github_login
 from .models import EVENT_KEYS
 from .templates import truncate_text
@@ -484,7 +485,9 @@ async def poll_subscription_once(
 
             github_to_qq = {
                 normalize_github_login(login): str(qq)
-                for login, qq in (config.get("github_to_qq") or {}).items()
+                for login, qq in normalize_github_to_qq(
+                    config.get("github_to_qq")
+                ).items()
             }
             for item in result.merged:
                 variables = _pr_variables(repo, item, pr_chars)

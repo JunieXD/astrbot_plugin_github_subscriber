@@ -69,9 +69,29 @@
   },
   "github_to_qq": {
     "description": "GitHub 用户名到 QQ UID 的映射",
-    "type": "dict",
-    "default": {},
-    "hint": "用于 PR 合并提醒时 @ PR 作者。左侧填写 GitHub 用户名，右侧填写 QQ UID。"
+    "type": "template_list",
+    "default": [],
+    "hint": "用于 PR 合并提醒时 @ PR 作者。每条映射填写一个 GitHub 用户名和 QQ UID。",
+    "templates": {
+      "mapping": {
+        "name": "用户映射",
+        "display_item": "github_login",
+        "items": {
+          "github_login": {
+            "description": "GitHub 用户名",
+            "type": "string",
+            "default": "",
+            "hint": "匹配不区分大小写，例如 JunieXD。"
+          },
+          "qq_uid": {
+            "description": "QQ UID",
+            "type": "string",
+            "default": "",
+            "hint": "PR 合并提醒时会 @ 这个 QQ 用户。"
+          }
+        }
+      }
+    }
   },
   "global_templates": {
     "description": "全局默认消息模板",
