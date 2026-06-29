@@ -29,6 +29,8 @@ def test_parse_supported_repo_refs(value: str, expected: str):
         "owner/repo.git",
         "http://github.com/owner/repo",
         "https://github.com/owner/repo.git/",
+        "https://github.com/owner/repo.git.extra",
+        "https://github.com/owner/repo.git/extra",
         "github.com/owner/repo/",
         "owner/repo/",
         "owner",

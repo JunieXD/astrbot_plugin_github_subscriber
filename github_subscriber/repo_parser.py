@@ -9,7 +9,7 @@ class RepoParseError(ValueError):
 
 _OWNER = r"(?P<owner>[A-Za-z0-9_.-]+)"
 _REPO = r"(?P<repo>[A-Za-z0-9_.-]+)"
-_REPO_WITHOUT_GIT_SUFFIX = r"(?P<repo>(?![A-Za-z0-9_.-]*\.git/?$)[A-Za-z0-9_.-]+)"
+_REPO_WITHOUT_GIT_SUFFIX = r"(?P<repo>(?![A-Za-z0-9_.-]*\.git)[A-Za-z0-9_.-]+)"
 _HTTPS_GITHUB_REPO_PATTERN = re.compile(
     rf"^https://github\.com/{_OWNER}/{_REPO_WITHOUT_GIT_SUFFIX}/?$"
 )
