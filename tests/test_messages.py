@@ -39,6 +39,23 @@ def test_build_star_variables_limits_user_names():
     assert variables["star_users"] == "a、b、c、d、e 等，共 6 人"
 
 
+def test_build_star_variables_accepts_positional_arguments():
+    variables = build_star_variables(
+        "Owner/Repo",
+        "https://github.com/Owner/Repo",
+        1,
+        ["alice"],
+    )
+
+    assert variables["repo"] == "Owner/Repo"
+    assert variables["repo_url"] == "https://github.com/Owner/Repo"
+    assert variables["owner"] == "Owner"
+    assert variables["repo_name"] == "Repo"
+    assert variables["new_star_count"] == 1
+    assert variables["star_count"] == 1
+    assert variables["star_users"] == "alice"
+
+
 def test_build_star_variables_uses_all_names_when_five_or_fewer():
     variables = build_star_variables(
         repo="Owner/Repo",

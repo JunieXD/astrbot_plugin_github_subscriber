@@ -11,7 +11,6 @@ def resolve_template(config: dict[str, Any], sub: dict[str, Any], template_name:
 
 
 def build_star_variables(
-    *,
     repo: str,
     repo_url: str,
     star_count: int,
