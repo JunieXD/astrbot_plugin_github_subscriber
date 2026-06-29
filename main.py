@@ -15,21 +15,38 @@ except ImportError:  # pragma: no cover - used only outside AstrBot.
     def get_astrbot_plugin_data_path() -> str:
         return str(Path("data") / "plugin_data")
 
-from github_subscriber.config import (
-    add_subscription,
-    disable_event,
-    enable_event,
-    find_subscription,
-    get_subscriptions_for_target,
-    normalize_config,
-    remove_subscription,
-)
-from github_subscriber.github_client import GitHubClient
-from github_subscriber.messages import render_text_message
-from github_subscriber.models import EVENT_KEYS
-from github_subscriber.poller import poll_subscription_once
-from github_subscriber.repo_parser import RepoParseError, parse_repo_ref
-from github_subscriber.state import JsonStateStore
+try:
+    from .github_subscriber.config import (
+        add_subscription,
+        disable_event,
+        enable_event,
+        find_subscription,
+        get_subscriptions_for_target,
+        normalize_config,
+        remove_subscription,
+    )
+    from .github_subscriber.github_client import GitHubClient
+    from .github_subscriber.messages import render_text_message
+    from .github_subscriber.models import EVENT_KEYS
+    from .github_subscriber.poller import poll_subscription_once
+    from .github_subscriber.repo_parser import RepoParseError, parse_repo_ref
+    from .github_subscriber.state import JsonStateStore
+except ImportError:  # pragma: no cover - supports direct local imports in tests/dev.
+    from github_subscriber.config import (
+        add_subscription,
+        disable_event,
+        enable_event,
+        find_subscription,
+        get_subscriptions_for_target,
+        normalize_config,
+        remove_subscription,
+    )
+    from github_subscriber.github_client import GitHubClient
+    from github_subscriber.messages import render_text_message
+    from github_subscriber.models import EVENT_KEYS
+    from github_subscriber.poller import poll_subscription_once
+    from github_subscriber.repo_parser import RepoParseError, parse_repo_ref
+    from github_subscriber.state import JsonStateStore
 
 SUPPORTED_EVENT_NAMES = (*EVENT_KEYS, "all")
 

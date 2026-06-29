@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import importlib.util
 import sys
 import types
 from pathlib import Path
 from typing import Any
 
 
-def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
+def install_astrbot_stub_modules(monkeypatch, plugin_data_path: Path | None = None):
     plugin_data_path = plugin_data_path or Path("stub-plugin-data")
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
@@ -140,7 +141,18 @@ def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
     monkeypatch.setitem(sys.modules, "astrbot.api.star", star_module)
 
     sys.modules.pop("main", None)
+    return api, star_module
+
+
+def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
+    install_astrbot_stub_modules(monkeypatch, plugin_data_path)
     return importlib.import_module("main")
+
+
+def install_astrbot_stubs_only(monkeypatch, plugin_data_path: Path | None = None):
+    module = install_astrbot_stub_modules(monkeypatch, plugin_data_path)
+    sys.modules.pop("main", None)
+    return module
 
 
 class FakeEvent:
@@ -161,6 +173,32 @@ async def collect_plain_result(async_iterable) -> list[str]:
 
 def test_imports_with_stubbed_astrbot_modules(monkeypatch):
     module = install_astrbot_stubs(monkeypatch)
+
+    assert module.ghsub.name == "ghsub"
+    assert hasattr(module, "GitHubSubscriberPlugin")
+
+
+def test_imports_when_loaded_as_plugin_package(monkeypatch):
+    install_astrbot_stubs_only(monkeypatch)
+    module_name = "astrbot_plugin_github_subscriber.main"
+    plugin_dir = Path(__file__).resolve().parents[1]
+    sanitized_path = [
+        entry
+        for entry in sys.path
+        if entry and Path(entry).resolve() != plugin_dir
+    ]
+    monkeypatch.setattr(sys, "path", sanitized_path)
+    for name in list(sys.modules):
+        if name == "github_subscriber" or name.startswith("github_subscriber."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    spec = importlib.util.spec_from_file_location(module_name, plugin_dir / "main.py")
+    module = importlib.util.module_from_spec(spec)
+    package = types.ModuleType("astrbot_plugin_github_subscriber")
+    package.__path__ = [str(plugin_dir)]
+    monkeypatch.setitem(sys.modules, "astrbot_plugin_github_subscriber", package)
+    monkeypatch.setitem(sys.modules, module_name, module)
+
+    spec.loader.exec_module(module)
 
     assert module.ghsub.name == "ghsub"
     assert hasattr(module, "GitHubSubscriberPlugin")
