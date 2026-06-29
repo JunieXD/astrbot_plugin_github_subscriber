@@ -106,6 +106,7 @@ repo: JunieXD/AutoEmailSender
       "target_umo": "aiocqhttp:GroupMessage:123456789",
       "target_name": "示例交流群",
       "repo": "JunieXD/AutoEmailSender",
+      "created_at": "2026-06-29T12:00:00+00:00",
       "enabled": true,
       "events": {
         "star": false,
@@ -180,14 +181,16 @@ state_key = hash(target_umo + ":" + owner + "/" + repo)
 
 ## 初始化规则
 
-新增订阅时先建立 baseline，不发送历史消息：
+新增订阅时记录订阅创建时间 `created_at`。首次轮询再建立 baseline，不发送历史消息：
 
 - Star：拉取当前 stargazers，全部写入 `known_star_users`。
-- Release：拉取当前 releases，把已有 release id 记录为已处理，或以订阅时刻作为过滤阈值。
-- Issue：拉取当前 issue，把已有 issue number 记录为已处理，或以订阅时刻作为过滤阈值。
-- PR：拉取当前 open/closed PR，把已有 PR number 和已合并 PR number 记录为已处理，或以订阅时刻作为过滤阈值。
+- Release：拉取当前 releases，只把发布时间不晚于 `created_at` 的 release id 记录为已处理。
+- Issue：拉取当前 issue，只把创建时间不晚于 `created_at` 的 issue number 记录为已处理。
+- PR：拉取当前 open/closed PR，只把创建时间或合并时间不晚于 `created_at` 的 PR number 记录为已处理。
 
 之后只提醒订阅建立后的新增事件。
+
+如果 WebUI 手动配置订阅且没有 `created_at`，首次轮询会以当时仓库状态建立 baseline。
 
 如果初始化接口失败，订阅不应静默半成功。命令添加时应向管理员提示失败原因；WebUI 配置启动时应记录错误日志，并在后续周期重试初始化。
 

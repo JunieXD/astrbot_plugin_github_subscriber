@@ -151,6 +151,12 @@
             "default": "",
             "hint": "填写 owner/repo 或 GitHub 仓库链接，例如 JunieXD/AutoEmailSender 或 https://github.com/owner/repo。"
           },
+          "created_at": {
+            "description": "订阅创建时间",
+            "type": "string",
+            "default": "",
+            "hint": "通过命令添加订阅时会自动写入。用于避免首次轮询前新增的事件被 baseline 吃掉。"
+          },
           "enabled": {
             "description": "启用此订阅",
             "type": "bool",

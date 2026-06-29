@@ -44,7 +44,7 @@
 - `github_token`：可选 GitHub token。公开 GitHub API 不配置 token 也可以使用，但限流较低；建议配置 token 提高稳定性。
 - `github_to_qq`：GitHub 用户名到 QQ UID 的映射列表，用于 PR 合并提醒时 @ PR 作者。用户名匹配不区分大小写。
 - `global_templates`：全局默认消息模板，支持 `star`、`release`、`issue`、`pr_opened`、`pr_merged`。
-- `subscriptions`：订阅列表。每条订阅包含目标会话 `target_umo`、仓库 `repo`、启用状态、事件开关、轮询间隔和 `template_overrides`。
+- `subscriptions`：订阅列表。每条订阅包含目标会话 `target_umo`、仓库 `repo`、订阅创建时间 `created_at`、启用状态、事件开关、轮询间隔和 `template_overrides`。
 
 单条订阅的 `template_overrides` 留空时使用 `global_templates`；填写后只覆盖当前订阅，不影响其他群聊或私聊。
 
@@ -100,7 +100,9 @@
 
 ## Baseline
 
-首次轮询会拉取仓库全部相关事件建立 baseline，不发送历史消息。后续只提醒 baseline 之后新增的事件。
+使用 `/ghsub add` 添加订阅时，插件会记录订阅创建时间 `created_at`。首次轮询会拉取仓库相关事件建立 baseline，只把订阅创建时间之前的 Release、Issue、PR 记录为已处理，不发送历史消息；如果在 `/ghsub add` 成功后、首次轮询前创建了新的 Issue/PR/Release，后续轮询仍会提醒。
+
+如果通过 WebUI 手动添加订阅且没有填写 `created_at`，首次轮询会以当时仓库状态建立 baseline，不发送此前已有事件。
 
 如果某个事件原本关闭，后续再开启，也不会把关闭期间或历史已有的事件刷出来；插件会以已记录状态为准继续提醒新事件。
 

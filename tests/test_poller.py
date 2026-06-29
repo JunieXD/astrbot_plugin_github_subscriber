@@ -410,6 +410,56 @@ async def test_initial_baseline_records_current_event_switches():
     }
 
 
+async def test_initial_baseline_keeps_post_subscription_issue_for_notification():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.issues = [
+        {
+            "number": 1,
+            "title": "old issue",
+            "user": {"login": "alice"},
+            "created_at": "2026-06-29T00:00:00Z",
+            "html_url": "https://github.com/Owner/Repo/issues/1",
+            "body": "old",
+        },
+        {
+            "number": 2,
+            "title": "new issue",
+            "user": {"login": "bob"},
+            "created_at": "2026-06-29T00:02:00Z",
+            "html_url": "https://github.com/Owner/Repo/issues/2",
+            "body": "new",
+        },
+    ]
+    state = {}
+    sub = subscription({"issue": True})
+    sub["created_at"] = "2026-06-29T00:01:00+00:00"
+
+    baseline_messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        sub,
+        state,
+        now=datetime(2026, 6, 29, 0, 3, tzinfo=timezone.utc),
+    )
+
+    assert baseline_messages == []
+    assert state["notified_issue_numbers"] == [1]
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        sub,
+        state,
+        now=datetime(2026, 6, 29, 0, 5, tzinfo=timezone.utc),
+    )
+
+    assert [message["template_name"] for message in messages] == ["issue"]
+    assert messages[0]["variables"]["number"] == 2
+    assert state["notified_issue_numbers"] == [1, 2]
+
+
 async def test_poll_subscription_once_does_not_mutate_state_when_later_api_fails():
     from github_subscriber import poller
 

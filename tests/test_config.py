@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timezone
 
 from github_subscriber.config import (
     DEFAULT_GLOBAL_TEMPLATES,
@@ -70,6 +71,7 @@ def test_add_subscription_defaults_events_and_target():
     assert sub["repo"] == "Owner/Repo"
     assert sub["__template_key"] == "subscription"
     assert sub["target_umo"] == "aiocqhttp:GroupMessage:123"
+    assert datetime.fromisoformat(sub["created_at"]).tzinfo == timezone.utc
     assert sub["enabled"] is True
     assert sub["events"] == {
         "star": False,

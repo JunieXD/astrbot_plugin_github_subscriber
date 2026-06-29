@@ -125,6 +125,7 @@ def initialize_baseline(
     open_prs: list[dict[str, Any]],
     closed_prs: list[dict[str, Any]],
     events: dict[str, bool] | None = None,
+    threshold: datetime | None = None,
     now: str,
 ) -> None:
     state["initialized_at"] = now
@@ -134,20 +135,35 @@ def initialize_baseline(
         if (item.get("user") or {}).get("login")
     ]
     state["notified_release_ids"] = [
-        item["id"] for item in releases if item.get("id") is not None
+        item["id"]
+        for item in releases
+        if item.get("id") is not None
+        and _item_is_not_after_threshold(
+            item,
+            threshold,
+            "published_at",
+            "created_at",
+        )
     ]
     state["notified_issue_numbers"] = [
         item["number"]
         for item in issues
-        if "pull_request" not in item and item.get("number") is not None
+        if "pull_request" not in item
+        and item.get("number") is not None
+        and _item_is_not_after_threshold(item, threshold, "created_at")
     ]
     state["notified_pr_numbers"] = [
-        item["number"] for item in open_prs if item.get("number") is not None
+        item["number"]
+        for item in open_prs
+        if item.get("number") is not None
+        and _item_is_not_after_threshold(item, threshold, "created_at")
     ]
     state["notified_merged_pr_numbers"] = [
         item["number"]
         for item in closed_prs
-        if item.get("merged_at") and item.get("number") is not None
+        if item.get("merged_at")
+        and item.get("number") is not None
+        and _item_is_not_after_threshold(item, threshold, "merged_at")
     ]
     events = events or {}
     state["event_enabled"] = {key: bool(events.get(key)) for key in EVENT_KEYS}
@@ -232,6 +248,22 @@ def _parse_checked_at(value: str | None) -> datetime | None:
     if checked_at.tzinfo is None:
         return checked_at.replace(tzinfo=timezone.utc)
     return checked_at.astimezone(timezone.utc)
+
+
+def _item_is_not_after_threshold(
+    item: dict[str, Any],
+    threshold: datetime | None,
+    *field_names: str,
+) -> bool:
+    if threshold is None:
+        return True
+
+    for field_name in field_names:
+        item_time = _parse_checked_at(str(item.get(field_name) or ""))
+        if item_time is not None:
+            return item_time <= threshold
+
+    return True
 
 
 def _event_interval_seconds(
@@ -334,6 +366,7 @@ async def poll_subscription_once(
     release_chars = int(limits.get("release_notes_max_chars", 1500))
     working_state = deepcopy(state)
     messages: list[dict[str, Any]] = []
+    subscription_created_at = _parse_checked_at(str(sub.get("created_at") or ""))
 
     if not working_state.get("initialized_at"):
         stargazers = await client.get_stargazers(owner, name)
@@ -349,6 +382,7 @@ async def poll_subscription_once(
             open_prs=open_prs,
             closed_prs=closed_prs,
             events=events,
+            threshold=subscription_created_at,
             now=now.isoformat(),
         )
         state.clear()

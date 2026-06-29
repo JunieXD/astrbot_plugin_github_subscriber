@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 from .models import EVENT_KEYS
@@ -103,6 +104,7 @@ def add_subscription(
         "target_umo": target_umo,
         "target_name": target_name,
         "repo": repo,
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "enabled": True,
         "events": deepcopy(DEFAULT_SUBSCRIPTION_EVENTS),
         "intervals": deepcopy(config.get("default_intervals") or DEFAULT_CONFIG["default_intervals"]),
