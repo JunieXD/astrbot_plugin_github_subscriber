@@ -48,6 +48,47 @@
 
 单条订阅的 `template_overrides` 留空时使用 `global_templates`；填写后只覆盖当前订阅，不影响其他群聊或私聊。
 
+## 模板占位符
+
+模板只支持 `{变量名}` 形式的简单占位符，不支持条件、循环或表达式。未知占位符会渲染为空字符串。
+
+所有事件都可使用：
+
+- `{repo}`：仓库全名，例如 `owner/repo`
+- `{repo_url}`：仓库 GitHub 链接
+- `{owner}`：仓库 owner
+- `{repo_name}`：仓库名称
+
+`star` 可使用：
+
+- `{new_star_count}`：本轮新增 Star 数
+- `{star_count}`：当前仓库 Star 总数
+- `{star_users}`：本轮新增 Star 的 GitHub 用户名，最多展示 5 个，超过会显示总人数
+
+`release` 可使用：
+
+- `{tag_name}`：Release tag
+- `{release_name}`：Release 名称，未填写时使用 tag
+- `{release_author}`：Release 作者 GitHub 用户名
+- `{release_time}`：Release 发布时间
+- `{release_url}`：Release 链接
+- `{release_notes}`：Release note 内容，超过 `release_notes_max_chars` 会截断
+
+`issue` 和 `pr_opened` 可使用：
+
+- `{number}`：Issue 或 PR 编号
+- `{title}`：标题
+- `{author}`：作者 GitHub 用户名
+- `{created_at}`：创建时间
+- `{url}`：Issue 或 PR 链接
+- `{body_summary}`：正文摘要，超过对应摘要长度限制会截断
+
+`pr_merged` 额外可使用：
+
+- `{merged_by}`：合并者 GitHub 用户名
+- `{merged_at}`：合并时间
+- `{mention}`：命中 `github_to_qq` 映射时用于给 At 组件预留位置；未命中时为空
+
 ## 限流与发送
 
 - 插件内部每 60 秒唤醒一次，但每个订阅项的 Star、Release、Issue、PR 会分别按各自配置的检查间隔判断是否需要请求 GitHub。
