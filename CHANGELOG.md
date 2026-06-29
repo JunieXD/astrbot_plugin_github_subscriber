@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.1
+
+- 修复通过 GitHub 链接导入时包内模块导入失败的问题。
+- 修复配置 schema 使用 AstrBot 不支持的 `dict` 类型导致加载失败的问题。
+- 修复 `/ghsub add` 后首次轮询前创建的 Issue、PR、Release 被 baseline 误吞的问题。
+- 补充模板占位符文档和插件更新日志文件。
+
 ## v0.1.0
 
 - 支持按群聊或私聊独立订阅 GitHub 仓库。
