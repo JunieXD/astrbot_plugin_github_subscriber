@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.2
+
+- 修复 GitHub 用户名到 QQ UID 映射在 WebUI 中被写成对象后无法新增、删除的问题。
+- 启动时自动将旧版映射配置迁移回 AstrBot `template_list` 数组格式。
+
 ## v0.1.1
 
 - 修复通过 GitHub 链接导入时包内模块导入失败的问题。

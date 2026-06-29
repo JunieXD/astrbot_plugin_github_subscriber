@@ -32,7 +32,7 @@ DEFAULT_CONFIG = {
         "message_send_delay_seconds": 1,
     },
     "global_templates": DEFAULT_GLOBAL_TEMPLATES,
-    "github_to_qq": {},
+    "github_to_qq": [],
     "subscriptions": [],
 }
 
@@ -74,6 +74,24 @@ def normalize_github_to_qq(value: Any) -> dict[str, str]:
     return {}
 
 
+def normalize_github_to_qq_entries(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        return [
+            {
+                "__template_key": "mapping",
+                "github_login": str(login),
+                "qq_uid": str(qq),
+            }
+            for login, qq in value.items()
+            if str(login).strip() and str(qq).strip()
+        ]
+
+    if isinstance(value, list):
+        return [deepcopy(item) for item in value if isinstance(item, dict)]
+
+    return []
+
+
 def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
     config = deepcopy(DEFAULT_CONFIG)
     raw = raw or {}
@@ -85,7 +103,7 @@ def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
             config[key] = deepcopy(value)
 
     config["subscriptions"] = list(config.get("subscriptions") or [])
-    config["github_to_qq"] = normalize_github_to_qq(config.get("github_to_qq"))
+    config["github_to_qq"] = normalize_github_to_qq_entries(config.get("github_to_qq"))
     return config
 
 

@@ -60,7 +60,13 @@ class GitHubSubscriberPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.normalized_config: dict[str, Any] = normalize_config(dict(config))
+        raw_config = dict(config)
+        self.normalized_config: dict[str, Any] = normalize_config(raw_config)
+        if (
+            "github_to_qq" in raw_config
+            and raw_config.get("github_to_qq") != self.normalized_config.get("github_to_qq")
+        ):
+            self._persist_config()
         self._poller_task: asyncio.Task | None = None
         self.state = JsonStateStore(self._state_path())
 

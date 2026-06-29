@@ -7,6 +7,7 @@ from github_subscriber.config import (
     disable_event,
     enable_event,
     get_subscriptions_for_target,
+    normalize_github_to_qq,
     normalize_config,
     remove_subscription,
 )
@@ -16,7 +17,7 @@ def test_normalize_config_adds_defaults():
     config = normalize_config({})
 
     assert config["github_token"] == ""
-    assert config["github_to_qq"] == {}
+    assert config["github_to_qq"] == []
     assert config["default_intervals"]["star_minutes"] == 1
     assert config["default_intervals"]["release_minutes"] == 5
     assert config["default_intervals"]["issue_minutes"] == 2
@@ -47,16 +48,37 @@ def test_normalize_config_accepts_github_to_qq_template_list():
         }
     )
 
-    assert config["github_to_qq"] == {
+    assert config["github_to_qq"] == [
+        {
+            "__template_key": "mapping",
+            "github_login": "Alice",
+            "qq_uid": "10001",
+        },
+        {
+            "github_login": "bob",
+            "qq_uid": 10002,
+        },
+        {
+            "github_login": "",
+            "qq_uid": "ignored",
+        },
+    ]
+    assert normalize_github_to_qq(config["github_to_qq"]) == {
         "Alice": "10001",
         "bob": "10002",
     }
 
 
-def test_normalize_config_keeps_legacy_github_to_qq_dict():
+def test_normalize_config_migrates_legacy_github_to_qq_dict_to_template_list():
     config = normalize_config({"github_to_qq": {"Alice": 10001}})
 
-    assert config["github_to_qq"] == {"Alice": "10001"}
+    assert config["github_to_qq"] == [
+        {
+            "__template_key": "mapping",
+            "github_login": "Alice",
+            "qq_uid": "10001",
+        }
+    ]
 
 
 def test_add_subscription_defaults_events_and_target():
@@ -144,11 +166,17 @@ def test_normalize_config_copies_mutable_defaults():
     first = normalize_config({})
     second = normalize_config({})
 
-    first["github_to_qq"]["alice"] = "10001"
+    first["github_to_qq"].append(
+        {
+            "__template_key": "mapping",
+            "github_login": "alice",
+            "qq_uid": "10001",
+        }
+    )
     first["global_templates"]["issue"] = "changed"
     first["default_intervals"]["issue_minutes"] = 9
 
-    assert second["github_to_qq"] == {}
+    assert second["github_to_qq"] == []
     assert second["global_templates"] == DEFAULT_GLOBAL_TEMPLATES
     assert second["default_intervals"]["issue_minutes"] == 2
 

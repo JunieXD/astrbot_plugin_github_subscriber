@@ -217,10 +217,37 @@ def test_plugin_initializes_normalized_config_and_state_store(monkeypatch, tmp_p
     assert plugin.state.path == plugin_data_path / "astrbot_plugin_github_subscriber" / "state.json"
 
 
+def test_plugin_migrates_legacy_github_to_qq_dict_for_webui(monkeypatch, tmp_path):
+    plugin_data_path = tmp_path / "plugin_data"
+    module = install_astrbot_stubs(monkeypatch, plugin_data_path)
+    monkeypatch.chdir(tmp_path)
+    config = module.AstrBotConfig({"github_to_qq": {"alice": "10001"}})
+
+    plugin = module.GitHubSubscriberPlugin(module.Context(), config)
+
+    expected = [
+        {
+            "__template_key": "mapping",
+            "github_login": "alice",
+            "qq_uid": "10001",
+        }
+    ]
+    assert plugin.normalized_config["github_to_qq"] == expected
+    assert config["github_to_qq"] == expected
+    assert config.save_count == 1
+
+
 async def test_ghsub_add_persists_subscription_and_reports_defaults(monkeypatch, tmp_path):
     module = install_astrbot_stubs(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    config = module.AstrBotConfig({})
+    github_to_qq = [
+        {
+            "__template_key": "mapping",
+            "github_login": "alice",
+            "qq_uid": "10001",
+        }
+    ]
+    config = module.AstrBotConfig({"github_to_qq": github_to_qq})
     plugin = module.GitHubSubscriberPlugin(module.Context(), config)
     event = FakeEvent("aiocqhttp:GroupMessage:100")
 
@@ -239,6 +266,7 @@ async def test_ghsub_add_persists_subscription_and_reports_defaults(monkeypatch,
         "pr": True,
     }
     assert config["subscriptions"] == plugin.normalized_config["subscriptions"]
+    assert config["github_to_qq"] == github_to_qq
     assert replies == [
         "已订阅 JunieXD/AutoEmailSender\n"
         "已开启：Release、Issue、PR\n"
