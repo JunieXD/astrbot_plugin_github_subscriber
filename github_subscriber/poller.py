@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -196,12 +197,13 @@ async def poll_subscription_once(
     issue_chars = int(limits.get("issue_body_summary_chars", 300))
     pr_chars = int(limits.get("pr_body_summary_chars", 300))
     release_chars = int(limits.get("release_notes_max_chars", 1500))
+    working_state = deepcopy(state)
     messages: list[dict[str, Any]] = []
 
     if events.get("star"):
         stargazers = await client.get_stargazers(owner, name)
         repo_meta = await client.get_repo(owner, name)
-        new_users = collect_new_stars(state, stargazers)
+        new_users = collect_new_stars(working_state, stargazers)
         if new_users:
             messages.append(
                 {
@@ -219,7 +221,7 @@ async def poll_subscription_once(
 
     if events.get("release"):
         releases = await client.get_releases(owner, name)
-        selected_release, _skipped_count = collect_new_releases(state, releases)
+        selected_release, _skipped_count = collect_new_releases(working_state, releases)
         if selected_release:
             messages.append(
                 {
@@ -233,7 +235,7 @@ async def poll_subscription_once(
     if events.get("issue"):
         issues = await client.get_issues(owner, name)
         selected_issues, skipped_count = collect_new_issues(
-            state,
+            working_state,
             issues,
             limit=max_items,
         )
@@ -255,7 +257,7 @@ async def poll_subscription_once(
         open_prs = await client.get_pulls(owner, name, "open")
         closed_prs = await client.get_pulls(owner, name, "closed")
         result = collect_new_prs(
-            state,
+            working_state,
             open_prs=open_prs,
             closed_prs=closed_prs,
             limit=max_items,
@@ -309,4 +311,6 @@ async def poll_subscription_once(
                 )
             )
 
+    state.clear()
+    state.update(working_state)
     return messages

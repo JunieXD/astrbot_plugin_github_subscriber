@@ -366,6 +366,7 @@ async def test_poll_loop_warns_and_continues_after_github_api_error(monkeypatch,
 
     async def fake_poll_subscription_once(client, normalized_config, sub, state):
         if sub["repo"] == "Owner/Fail":
+            state["notified_issue_numbers"] = [99]
             raise module.GitHubApiError(500, "boom")
         return [
             {
@@ -394,3 +395,5 @@ async def test_poll_loop_warns_and_continues_after_github_api_error(monkeypatch,
     assert context.sent_messages[0][1].chain == ["Owner/Ok ok"]
     assert module.logger.warnings
     assert "Owner/Fail" in module.logger.warnings[0][1]
+    failed_state = plugin.state.get_subscription_state("umo-a", "Owner/Fail")
+    assert failed_state["notified_issue_numbers"] == []

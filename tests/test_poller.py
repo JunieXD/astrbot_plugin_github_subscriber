@@ -14,6 +14,7 @@ class FakeGitHubClient:
         self.releases: list[dict] = []
         self.issues: list[dict] = []
         self.pulls: dict[str, list[dict]] = {"open": [], "closed": []}
+        self.pull_errors: dict[str, Exception] = {}
 
     async def get_stargazers(self, owner: str, repo: str) -> list[dict]:
         self.calls.append(("get_stargazers", owner, repo))
@@ -33,6 +34,8 @@ class FakeGitHubClient:
 
     async def get_pulls(self, owner: str, repo: str, state: str) -> list[dict]:
         self.calls.append(("get_pulls", owner, repo, state))
+        if state in self.pull_errors:
+            raise self.pull_errors[state]
         return self.pulls[state]
 
 
@@ -246,6 +249,51 @@ async def test_poll_subscription_once_adds_issue_limit_summary():
     )
     assert messages[2]["mention_qq"] == ""
     assert client.calls == [("get_issues", "Owner", "Repo")]
+
+
+async def test_poll_subscription_once_does_not_mutate_state_when_later_api_fails():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.issues = [
+        {
+            "number": 10,
+            "title": "Issue before failure",
+            "user": {"login": "alice"},
+            "created_at": "2026-06-01T00:00:00Z",
+            "html_url": "https://github.com/Owner/Repo/issues/10",
+            "body": "body",
+        }
+    ]
+    client.pull_errors["open"] = RuntimeError("pulls failed")
+    state = {
+        "notified_issue_numbers": [],
+        "notified_pr_numbers": [],
+        "notified_merged_pr_numbers": [],
+    }
+    before = {
+        "notified_issue_numbers": [],
+        "notified_pr_numbers": [],
+        "notified_merged_pr_numbers": [],
+    }
+
+    try:
+        await poller.poll_subscription_once(
+            client,
+            poller_config(),
+            subscription({"issue": True, "pr": True}),
+            state,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "pulls failed"
+    else:
+        raise AssertionError("poll_subscription_once should re-raise API failures")
+
+    assert state == before
+    assert client.calls == [
+        ("get_issues", "Owner", "Repo"),
+        ("get_pulls", "Owner", "Repo", "open"),
+    ]
 
 
 async def test_poll_subscription_once_release_sends_latest_only():

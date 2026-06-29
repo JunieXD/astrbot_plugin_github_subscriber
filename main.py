@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -189,6 +190,7 @@ class GitHubSubscriberPlugin(Star):
                         sub["target_umo"],
                         sub["repo"],
                     )
+                    state_before_poll = deepcopy(sub_state)
                     try:
                         messages = await poll_subscription_once(
                             client,
@@ -197,6 +199,8 @@ class GitHubSubscriberPlugin(Star):
                             sub_state,
                         )
                     except GitHubApiError as exc:
+                        sub_state.clear()
+                        sub_state.update(state_before_poll)
                         logger.warning(
                             "GitHub polling failed for %s: %s",
                             sub.get("repo"),
