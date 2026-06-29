@@ -73,10 +73,17 @@ def test_initialize_baseline_records_existing_items_without_messages():
     initialize_baseline(
         state,
         stargazers=[{"user": {"login": "alice"}}],
-        releases=[{"id": 1}],
-        issues=[{"number": 2}, {"number": 3, "pull_request": {}}],
-        open_prs=[{"number": 4}],
-        closed_prs=[{"number": 5, "merged_at": "2026-06-01T00:00:00Z"}],
+        releases=[{"id": 1}, {"id": None}],
+        issues=[
+            {"number": 2},
+            {"number": 3, "pull_request": {}},
+            {"number": None},
+        ],
+        open_prs=[{"number": 4}, {"number": None}],
+        closed_prs=[
+            {"number": 5, "merged_at": "2026-06-01T00:00:00Z"},
+            {"number": None, "merged_at": "2026-06-02T00:00:00Z"},
+        ],
         now="2026-06-29T00:00:00Z",
     )
 
@@ -371,6 +378,8 @@ async def test_poll_subscription_once_does_not_mutate_state_when_baseline_api_fa
 
     assert state == before
     assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_releases", "Owner", "Repo"),
         ("get_issues", "Owner", "Repo"),
         ("get_pulls", "Owner", "Repo", "open"),
     ]
@@ -468,12 +477,14 @@ async def test_poll_subscription_once_initializes_baseline_without_messages_then
 
     assert messages == []
     assert state["initialized_at"]
-    assert state["known_star_users"] == []
-    assert state["notified_release_ids"] == []
+    assert state["known_star_users"] == ["alice"]
+    assert state["notified_release_ids"] == [1]
     assert state["notified_issue_numbers"] == [2]
     assert state["notified_pr_numbers"] == [4]
     assert state["notified_merged_pr_numbers"] == [5]
     assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_releases", "Owner", "Repo"),
         ("get_issues", "Owner", "Repo"),
         ("get_pulls", "Owner", "Repo", "open"),
         ("get_pulls", "Owner", "Repo", "closed"),
@@ -536,6 +547,64 @@ async def test_poll_subscription_once_initializes_baseline_without_messages_then
     ]
 
 
+async def test_poll_subscription_once_baselines_disabled_events_before_star_is_enabled():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.stargazers = [{"user": {"login": "alice"}}]
+    client.repo_meta = {"stargazers_count": 2}
+    client.releases = [{"id": 1}]
+    client.issues = [{"number": 2}]
+    client.pulls["open"] = [{"number": 3}]
+    client.pulls["closed"] = [
+        {"number": 4, "merged_at": "2026-06-01T00:00:00Z"}
+    ]
+    state = {"initialized_at": ""}
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(),
+        subscription({"star": False, "release": True, "issue": False, "pr": False}),
+        state,
+    )
+
+    assert messages == []
+    assert state["known_star_users"] == ["alice"]
+    assert state["notified_release_ids"] == [1]
+    assert state["notified_issue_numbers"] == [2]
+    assert state["notified_pr_numbers"] == [3]
+    assert state["notified_merged_pr_numbers"] == [4]
+    assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_releases", "Owner", "Repo"),
+        ("get_issues", "Owner", "Repo"),
+        ("get_pulls", "Owner", "Repo", "open"),
+        ("get_pulls", "Owner", "Repo", "closed"),
+    ]
+
+    client.calls.clear()
+    client.stargazers = [
+        {"user": {"login": "alice"}, "starred_at": "2026-06-01T00:00:00Z"},
+        {"user": {"login": "bob"}, "starred_at": "2026-06-29T00:00:00Z"},
+    ]
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(),
+        subscription({"star": True, "release": False, "issue": False, "pr": False}),
+        state,
+    )
+
+    assert [message["template_name"] for message in messages] == ["star"]
+    assert messages[0]["variables"]["new_star_count"] == 1
+    assert messages[0]["variables"]["star_users"] == "bob"
+    assert state["known_star_users"] == ["alice", "bob"]
+    assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_repo", "Owner", "Repo"),
+    ]
+
+
 async def test_poll_subscription_once_pr_merged_mentions_mapped_author():
     from github_subscriber import poller
 
@@ -586,4 +655,10 @@ async def test_poll_subscription_once_skips_disabled_event_apis():
     )
 
     assert messages == []
-    assert client.calls == []
+    assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_releases", "Owner", "Repo"),
+        ("get_issues", "Owner", "Repo"),
+        ("get_pulls", "Owner", "Repo", "open"),
+        ("get_pulls", "Owner", "Repo", "closed"),
+    ]

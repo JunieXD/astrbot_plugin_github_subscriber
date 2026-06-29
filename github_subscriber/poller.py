@@ -130,19 +130,21 @@ def initialize_baseline(
         for item in stargazers
         if (item.get("user") or {}).get("login")
     ]
-    state["notified_release_ids"] = [item["id"] for item in releases if "id" in item]
+    state["notified_release_ids"] = [
+        item["id"] for item in releases if item.get("id") is not None
+    ]
     state["notified_issue_numbers"] = [
         item["number"]
         for item in issues
-        if "pull_request" not in item and "number" in item
+        if "pull_request" not in item and item.get("number") is not None
     ]
     state["notified_pr_numbers"] = [
-        item["number"] for item in open_prs if "number" in item
+        item["number"] for item in open_prs if item.get("number") is not None
     ]
     state["notified_merged_pr_numbers"] = [
         item["number"]
         for item in closed_prs
-        if item.get("merged_at") and "number" in item
+        if item.get("merged_at") and item.get("number") is not None
     ]
 
 
@@ -234,18 +236,11 @@ async def poll_subscription_once(
     messages: list[dict[str, Any]] = []
 
     if not working_state.get("initialized_at"):
-        stargazers = (
-            await client.get_stargazers(owner, name) if events.get("star") else []
-        )
-        releases = (
-            await client.get_releases(owner, name) if events.get("release") else []
-        )
-        issues = await client.get_issues(owner, name) if events.get("issue") else []
-        open_prs: list[dict[str, Any]] = []
-        closed_prs: list[dict[str, Any]] = []
-        if events.get("pr"):
-            open_prs = await client.get_pulls(owner, name, "open")
-            closed_prs = await client.get_pulls(owner, name, "closed")
+        stargazers = await client.get_stargazers(owner, name)
+        releases = await client.get_releases(owner, name)
+        issues = await client.get_issues(owner, name)
+        open_prs = await client.get_pulls(owner, name, "open")
+        closed_prs = await client.get_pulls(owner, name, "closed")
         initialize_baseline(
             working_state,
             stargazers=stargazers,
