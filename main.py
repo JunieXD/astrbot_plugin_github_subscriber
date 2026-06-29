@@ -7,6 +7,11 @@ from typing import Any
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
+try:
+    from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+except ImportError:  # pragma: no cover - used only outside AstrBot.
+    def get_astrbot_plugin_data_path() -> str:
+        return str(Path("data") / "plugin_data")
 
 from github_subscriber.config import (
     add_subscription,
@@ -17,8 +22,11 @@ from github_subscriber.config import (
     normalize_config,
     remove_subscription,
 )
+from github_subscriber.models import EVENT_KEYS
 from github_subscriber.repo_parser import RepoParseError, parse_repo_ref
 from github_subscriber.state import JsonStateStore
+
+SUPPORTED_EVENT_NAMES = (*EVENT_KEYS, "all")
 
 
 @filter.command_group("ghsub")
@@ -104,7 +112,10 @@ class GitHubSubscriberPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @ghsub.command("status")
     async def ghsub_status(self, event: AstrMessageEvent, repo_ref: str):
-        repo = parse_repo_ref(repo_ref)
+        repo, error = self._parse_repo_ref(repo_ref)
+        if error is not None:
+            yield event.plain_result(error)
+            return
         sub = find_subscription(self.normalized_config, event.unified_msg_origin, repo)
         if sub is None:
             yield event.plain_result(f"当前会话未订阅 {repo}")
@@ -115,7 +126,10 @@ class GitHubSubscriberPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @ghsub.command("remove")
     async def ghsub_remove(self, event: AstrMessageEvent, repo_ref: str):
-        repo = parse_repo_ref(repo_ref)
+        repo, error = self._parse_repo_ref(repo_ref)
+        if error is not None:
+            yield event.plain_result(error)
+            return
         if remove_subscription(self.normalized_config, event.unified_msg_origin, repo):
             self._persist_config()
             yield event.plain_result(f"已移除订阅 {repo}")
@@ -125,8 +139,17 @@ class GitHubSubscriberPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @ghsub.command("enable")
     async def ghsub_enable(self, event: AstrMessageEvent, repo_ref: str, event_name: str):
-        repo = parse_repo_ref(repo_ref)
-        if enable_event(self.normalized_config, event.unified_msg_origin, repo, event_name):
+        repo, error = self._parse_repo_ref(repo_ref)
+        if error is not None:
+            yield event.plain_result(error)
+            return
+        try:
+            changed = enable_event(self.normalized_config, event.unified_msg_origin, repo, event_name)
+        except ValueError:
+            yield event.plain_result(self._unknown_event_message(event_name))
+            return
+
+        if changed:
             self._persist_config()
             yield event.plain_result(f"已开启 {repo} 的 {event_name} 提醒")
         else:
@@ -135,8 +158,17 @@ class GitHubSubscriberPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @ghsub.command("disable")
     async def ghsub_disable(self, event: AstrMessageEvent, repo_ref: str, event_name: str):
-        repo = parse_repo_ref(repo_ref)
-        if disable_event(self.normalized_config, event.unified_msg_origin, repo, event_name):
+        repo, error = self._parse_repo_ref(repo_ref)
+        if error is not None:
+            yield event.plain_result(error)
+            return
+        try:
+            changed = disable_event(self.normalized_config, event.unified_msg_origin, repo, event_name)
+        except ValueError:
+            yield event.plain_result(self._unknown_event_message(event_name))
+            return
+
+        if changed:
             self._persist_config()
             yield event.plain_result(f"已关闭 {repo} 的 {event_name} 提醒")
         else:
@@ -153,4 +185,16 @@ class GitHubSubscriberPlugin(Star):
         self.config.save_config()
 
     def _state_path(self) -> Path:
-        return Path("data") / "plugin_data" / "astrbot_plugin_github_subscriber" / "state.json"
+        return Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_github_subscriber" / "state.json"
+
+    def _parse_repo_ref(self, repo_ref: str) -> tuple[str | None, str | None]:
+        try:
+            return parse_repo_ref(repo_ref), None
+        except RepoParseError as exc:
+            return None, str(exc)
+
+    def _unknown_event_message(self, event_name: str) -> str:
+        return f"未知事件类型：{event_name}。支持：{self._supported_event_names_text()}"
+
+    def _supported_event_names_text(self) -> str:
+        return "、".join(SUPPORTED_EVENT_NAMES)

@@ -3,12 +3,17 @@ from __future__ import annotations
 import importlib
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 
-def install_astrbot_stubs(monkeypatch):
+def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
+    plugin_data_path = plugin_data_path or Path("stub-plugin-data")
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
+    core = types.ModuleType("astrbot.core")
+    core_utils = types.ModuleType("astrbot.core.utils")
+    astrbot_path = types.ModuleType("astrbot.core.utils.astrbot_path")
     event_module = types.ModuleType("astrbot.api.event")
     star_module = types.ModuleType("astrbot.api.star")
 
@@ -82,8 +87,12 @@ def install_astrbot_stubs(monkeypatch):
         def __init__(self, context: Context) -> None:
             self.context = context
 
+    def get_astrbot_plugin_data_path() -> str:
+        return str(plugin_data_path)
+
     api.AstrBotConfig = AstrBotConfig
     api.logger = Logger()
+    astrbot_path.get_astrbot_plugin_data_path = get_astrbot_plugin_data_path
     event_module.AstrMessageEvent = AstrMessageEvent
     event_module.filter = Filter()
     star_module.Context = Context
@@ -91,6 +100,9 @@ def install_astrbot_stubs(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "astrbot", astrbot)
     monkeypatch.setitem(sys.modules, "astrbot.api", api)
+    monkeypatch.setitem(sys.modules, "astrbot.core", core)
+    monkeypatch.setitem(sys.modules, "astrbot.core.utils", core_utils)
+    monkeypatch.setitem(sys.modules, "astrbot.core.utils.astrbot_path", astrbot_path)
     monkeypatch.setitem(sys.modules, "astrbot.api.event", event_module)
     monkeypatch.setitem(sys.modules, "astrbot.api.star", star_module)
 
@@ -122,7 +134,8 @@ def test_imports_with_stubbed_astrbot_modules(monkeypatch):
 
 
 def test_plugin_initializes_normalized_config_and_state_store(monkeypatch, tmp_path):
-    module = install_astrbot_stubs(monkeypatch)
+    plugin_data_path = tmp_path / "plugin_data"
+    module = install_astrbot_stubs(monkeypatch, plugin_data_path)
     monkeypatch.chdir(tmp_path)
     config = module.AstrBotConfig({"github_token": "token"})
 
@@ -130,12 +143,7 @@ def test_plugin_initializes_normalized_config_and_state_store(monkeypatch, tmp_p
 
     assert plugin.normalized_config["github_token"] == "token"
     assert plugin.normalized_config["default_intervals"]["release_minutes"] == 5
-    assert plugin.state.path == (
-        module.Path("data")
-        / "plugin_data"
-        / "astrbot_plugin_github_subscriber"
-        / "state.json"
-    )
+    assert plugin.state.path == plugin_data_path / "astrbot_plugin_github_subscriber" / "state.json"
 
 
 async def test_ghsub_add_persists_subscription_and_reports_defaults(monkeypatch, tmp_path):
@@ -199,3 +207,40 @@ async def test_ghsub_enable_and_disable_persist_config(monkeypatch, tmp_path):
     assert config.save_count == 3
     assert enabled == ["已开启 Owner/Repo 的 star 提醒"]
     assert disabled == ["已关闭 Owner/Repo 的 issue 提醒"]
+
+
+async def test_repo_ref_errors_are_reported_by_all_repo_commands(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch, tmp_path / "plugin_data")
+    config = module.AstrBotConfig({})
+    plugin = module.GitHubSubscriberPlugin(module.Context(), config)
+    event = FakeEvent("umo-a")
+    expected = "请提供仓库主页链接，例如：https://github.com/owner/repo"
+
+    commands = [
+        plugin.ghsub_status(event, "not-a-repo"),
+        plugin.ghsub_remove(event, "not-a-repo"),
+        plugin.ghsub_enable(event, "not-a-repo", "star"),
+        plugin.ghsub_disable(event, "not-a-repo", "star"),
+    ]
+
+    for command in commands:
+        assert await collect_plain_result(command) == [expected]
+
+    assert config.save_count == 0
+
+
+async def test_unknown_event_errors_are_reported_without_persisting(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch, tmp_path / "plugin_data")
+    config = module.AstrBotConfig({})
+    plugin = module.GitHubSubscriberPlugin(module.Context(), config)
+    event = FakeEvent("umo-a")
+    await collect_plain_result(plugin.ghsub_add(event, "Owner/Repo"))
+    config.save_count = 0
+
+    enabled = await collect_plain_result(plugin.ghsub_enable(event, "Owner/Repo", "fork"))
+    disabled = await collect_plain_result(plugin.ghsub_disable(event, "Owner/Repo", "fork"))
+
+    expected = "未知事件类型：fork。支持：star、release、issue、pr、all"
+    assert enabled == [expected]
+    assert disabled == [expected]
+    assert config.save_count == 0
