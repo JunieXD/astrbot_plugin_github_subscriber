@@ -2,6 +2,7 @@
   "github_token": {
     "description": "GitHub Token（可选）",
     "type": "string",
+    "default": "",
     "hint": "不填写也可以订阅公开仓库；填写后可提高 GitHub API 限流额度。"
   },
   "default_intervals": {
@@ -69,6 +70,7 @@
   "github_to_qq": {
     "description": "GitHub 用户名到 QQ UID 的映射",
     "type": "dict",
+    "default": {},
     "hint": "用于 PR 合并提醒时 @ PR 作者。key 填 GitHub 用户名，value 填 QQ UID。"
   },
   "global_templates": {
@@ -104,7 +106,126 @@
   },
   "subscriptions": {
     "description": "GitHub 仓库订阅列表",
-    "type": "list",
-    "hint": "命令添加的订阅也会写入这里。每项包含 target_umo、repo、events、intervals 和 template_overrides。"
+    "type": "template_list",
+    "default": [],
+    "hint": "命令添加的订阅也会写入这里。target_umo 形如 aiocqhttp:GroupMessage:123456789，repo 形如 JunieXD/AutoEmailSender。",
+    "templates": {
+      "subscription": {
+        "name": "仓库订阅",
+        "display_item": "repo",
+        "items": {
+          "target_umo": {
+            "description": "订阅目标会话 ID",
+            "type": "string",
+            "default": "",
+            "hint": "可使用 /sid 获取当前会话的 target_umo；通过命令添加订阅时会自动写入。"
+          },
+          "target_name": {
+            "description": "订阅目标名称",
+            "type": "string",
+            "default": ""
+          },
+          "repo": {
+            "description": "GitHub 仓库",
+            "type": "string",
+            "default": "",
+            "hint": "填写 owner/repo 或 GitHub 仓库链接，例如 JunieXD/AutoEmailSender 或 https://github.com/owner/repo。"
+          },
+          "enabled": {
+            "description": "启用此订阅",
+            "type": "bool",
+            "default": true
+          },
+          "events": {
+            "description": "事件开关",
+            "type": "object",
+            "items": {
+              "star": {
+                "description": "Star 事件",
+                "type": "bool",
+                "default": false
+              },
+              "release": {
+                "description": "Release 事件",
+                "type": "bool",
+                "default": true
+              },
+              "issue": {
+                "description": "Issue 事件",
+                "type": "bool",
+                "default": true
+              },
+              "pr": {
+                "description": "PR 事件",
+                "type": "bool",
+                "default": true
+              }
+            }
+          },
+          "intervals": {
+            "description": "此订阅的轮询间隔",
+            "type": "object",
+            "items": {
+              "star_minutes": {
+                "description": "Star 检查间隔（分钟）",
+                "type": "int",
+                "default": 1
+              },
+              "release_minutes": {
+                "description": "Release 检查间隔（分钟）",
+                "type": "int",
+                "default": 5
+              },
+              "issue_minutes": {
+                "description": "Issue 检查间隔（分钟）",
+                "type": "int",
+                "default": 2
+              },
+              "pr_minutes": {
+                "description": "PR 检查间隔（分钟）",
+                "type": "int",
+                "default": 2
+              }
+            }
+          },
+          "template_overrides": {
+            "description": "此订阅的消息模板覆盖",
+            "type": "object",
+            "items": {
+              "star": {
+                "description": "Star 提醒模板覆盖",
+                "type": "text",
+                "default": "",
+                "hint": "留空使用全局模板。"
+              },
+              "release": {
+                "description": "Release 提醒模板覆盖",
+                "type": "text",
+                "default": "",
+                "hint": "留空使用全局模板。"
+              },
+              "issue": {
+                "description": "Issue 提醒模板覆盖",
+                "type": "text",
+                "default": "",
+                "hint": "留空使用全局模板。"
+              },
+              "pr_opened": {
+                "description": "新 PR 提醒模板覆盖",
+                "type": "text",
+                "default": "",
+                "hint": "留空使用全局模板。"
+              },
+              "pr_merged": {
+                "description": "PR 合并提醒模板覆盖",
+                "type": "text",
+                "default": "",
+                "hint": "留空使用全局模板。"
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
