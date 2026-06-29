@@ -35,6 +35,7 @@ def test_add_subscription_defaults_events_and_target():
     )
 
     assert sub["repo"] == "Owner/Repo"
+    assert sub["__template_key"] == "subscription"
     assert sub["target_umo"] == "aiocqhttp:GroupMessage:123"
     assert sub["enabled"] is True
     assert sub["events"] == {

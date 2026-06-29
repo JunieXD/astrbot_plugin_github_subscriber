@@ -76,6 +76,7 @@ def add_subscription(
         return existing
 
     sub = {
+        "__template_key": "subscription",
         "target_umo": target_umo,
         "target_name": target_name,
         "repo": repo,

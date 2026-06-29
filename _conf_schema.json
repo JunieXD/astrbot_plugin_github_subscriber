@@ -71,7 +71,7 @@
     "description": "GitHub 用户名到 QQ UID 的映射",
     "type": "dict",
     "default": {},
-    "hint": "用于 PR 合并提醒时 @ PR 作者。key 填 GitHub 用户名，value 填 QQ UID。"
+    "hint": "用于 PR 合并提醒时 @ PR 作者。左侧填写 GitHub 用户名，右侧填写 QQ UID。"
   },
   "global_templates": {
     "description": "全局默认消息模板",
