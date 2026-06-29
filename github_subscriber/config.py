@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
         "message_send_delay_seconds": 1,
     },
     "global_templates": DEFAULT_GLOBAL_TEMPLATES,
+    "github_to_qq": {},
     "subscriptions": [],
 }
 
@@ -78,6 +79,7 @@ def add_subscription(
         "target_umo": target_umo,
         "target_name": target_name,
         "repo": repo,
+        "enabled": True,
         "events": deepcopy(DEFAULT_SUBSCRIPTION_EVENTS),
         "intervals": deepcopy(config.get("default_intervals") or DEFAULT_CONFIG["default_intervals"]),
         "template_overrides": deepcopy(DEFAULT_TEMPLATE_OVERRIDES),
@@ -115,12 +117,12 @@ def remove_subscription(config: dict[str, Any], target_umo: str, repo: str) -> b
     return False
 
 
-def enable_event(config: dict[str, Any], target_umo: str, repo: str, event_name: str) -> None:
-    _set_event_enabled(config, target_umo, repo, event_name, True)
+def enable_event(config: dict[str, Any], target_umo: str, repo: str, event_name: str) -> bool:
+    return _set_event_enabled(config, target_umo, repo, event_name, True)
 
 
-def disable_event(config: dict[str, Any], target_umo: str, repo: str, event_name: str) -> None:
-    _set_event_enabled(config, target_umo, repo, event_name, False)
+def disable_event(config: dict[str, Any], target_umo: str, repo: str, event_name: str) -> bool:
+    return _set_event_enabled(config, target_umo, repo, event_name, False)
 
 
 def _set_event_enabled(
@@ -129,15 +131,16 @@ def _set_event_enabled(
     repo: str,
     event_name: str,
     enabled: bool,
-) -> None:
+) -> bool:
     if event_name != "all" and event_name not in EVENT_KEYS:
         raise ValueError(f"Unknown event: {event_name}")
 
     sub = find_subscription(config, target_umo, repo)
     if sub is None:
-        return
+        return False
 
     events = sub.setdefault("events", deepcopy(DEFAULT_SUBSCRIPTION_EVENTS))
     keys = EVENT_KEYS if event_name == "all" else (event_name,)
     for key in keys:
         events[key] = enabled
+    return True

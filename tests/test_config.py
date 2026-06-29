@@ -1,3 +1,5 @@
+import pytest
+
 from github_subscriber.config import (
     DEFAULT_GLOBAL_TEMPLATES,
     add_subscription,
@@ -13,6 +15,7 @@ def test_normalize_config_adds_defaults():
     config = normalize_config({})
 
     assert config["github_token"] == ""
+    assert config["github_to_qq"] == {}
     assert config["default_intervals"]["star_minutes"] == 1
     assert config["default_intervals"]["release_minutes"] == 5
     assert config["default_intervals"]["issue_minutes"] == 2
@@ -33,6 +36,7 @@ def test_add_subscription_defaults_events_and_target():
 
     assert sub["repo"] == "Owner/Repo"
     assert sub["target_umo"] == "aiocqhttp:GroupMessage:123"
+    assert sub["enabled"] is True
     assert sub["events"] == {
         "star": False,
         "release": True,
@@ -45,7 +49,7 @@ def test_add_subscription_defaults_events_and_target():
 def test_add_subscription_is_idempotent_per_target_and_repo():
     config = normalize_config({})
     first = add_subscription(config, "umo-a", "A", "Owner/Repo")
-    second = add_subscription(config, "umo-a", "A", "Owner/Repo")
+    second = add_subscription(config, "umo-a", "A", "owner/repo")
     third = add_subscription(config, "umo-b", "B", "Owner/Repo")
 
     assert first is second
@@ -57,10 +61,12 @@ def test_enable_disable_and_remove_subscription():
     config = normalize_config({})
     add_subscription(config, "umo-a", "A", "Owner/Repo")
 
-    enable_event(config, "umo-a", "Owner/Repo", "star")
+    assert enable_event(config, "umo-a", "Owner/Repo", "star") is True
     assert config["subscriptions"][0]["events"]["star"] is True
 
-    disable_event(config, "umo-a", "Owner/Repo", "all")
+    assert enable_event(config, "umo-missing", "Owner/Repo", "star") is False
+
+    assert disable_event(config, "umo-a", "Owner/Repo", "all") is True
     assert config["subscriptions"][0]["events"] == {
         "star": False,
         "release": False,
@@ -68,5 +74,34 @@ def test_enable_disable_and_remove_subscription():
         "pr": False,
     }
 
-    remove_subscription(config, "umo-a", "Owner/Repo")
+    assert disable_event(config, "umo-missing", "Owner/Repo", "all") is False
+
+    with pytest.raises(ValueError):
+        enable_event(config, "umo-a", "Owner/Repo", "unknown")
+    with pytest.raises(ValueError):
+        disable_event(config, "umo-a", "Owner/Repo", "unknown")
+
+    assert remove_subscription(config, "umo-missing", "Owner/Repo") is False
+    assert remove_subscription(config, "umo-a", "Owner/Repo") is True
     assert config["subscriptions"] == []
+
+
+def test_normalize_config_does_not_share_subscription_list():
+    first = normalize_config({})
+    second = normalize_config({})
+
+    first["subscriptions"].append({"repo": "Owner/Repo"})
+
+    assert second["subscriptions"] == []
+
+
+def test_add_subscription_does_not_share_mutable_defaults_between_subscriptions():
+    config = normalize_config({})
+    first = add_subscription(config, "umo-a", "A", "Owner/Repo")
+    second = add_subscription(config, "umo-b", "B", "Owner/Repo")
+
+    first["events"]["star"] = True
+    first["template_overrides"]["issue"] = "custom"
+
+    assert second["events"]["star"] is False
+    assert second["template_overrides"]["issue"] == ""
