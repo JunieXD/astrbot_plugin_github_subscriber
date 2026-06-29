@@ -61,7 +61,7 @@ def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
         else:
             config[key] = deepcopy(value)
 
-    config.setdefault("subscriptions", [])
+    config["subscriptions"] = list(config.get("subscriptions") or [])
     return config
 
 

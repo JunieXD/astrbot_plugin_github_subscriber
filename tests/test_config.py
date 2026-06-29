@@ -95,6 +95,28 @@ def test_normalize_config_does_not_share_subscription_list():
     assert second["subscriptions"] == []
 
 
+def test_normalize_config_coerces_subscriptions_to_list():
+    config = normalize_config({"subscriptions": None})
+
+    assert config["subscriptions"] == []
+
+    add_subscription(config, "umo", "name", "Owner/Repo")
+    assert len(config["subscriptions"]) == 1
+
+
+def test_normalize_config_copies_mutable_defaults():
+    first = normalize_config({})
+    second = normalize_config({})
+
+    first["github_to_qq"]["alice"] = "10001"
+    first["global_templates"]["issue"] = "changed"
+    first["default_intervals"]["issue_minutes"] = 9
+
+    assert second["github_to_qq"] == {}
+    assert second["global_templates"] == DEFAULT_GLOBAL_TEMPLATES
+    assert second["default_intervals"]["issue_minutes"] == 2
+
+
 def test_add_subscription_does_not_share_mutable_defaults_between_subscriptions():
     config = normalize_config({})
     first = add_subscription(config, "umo-a", "A", "Owner/Repo")
