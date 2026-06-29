@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 import types
@@ -15,6 +16,7 @@ def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
     core_utils = types.ModuleType("astrbot.core.utils")
     astrbot_path = types.ModuleType("astrbot.core.utils.astrbot_path")
     event_module = types.ModuleType("astrbot.api.event")
+    components_module = types.ModuleType("astrbot.api.message_components")
     star_module = types.ModuleType("astrbot.api.star")
 
     class AstrBotConfig(dict):
@@ -29,6 +31,7 @@ def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
         def __init__(self) -> None:
             self.infos: list[str] = []
             self.debugs: list[str] = []
+            self.warnings: list[tuple[Any, ...]] = []
 
         def info(self, message: str) -> None:
             self.infos.append(message)
@@ -36,8 +39,27 @@ def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
         def debug(self, message: str) -> None:
             self.debugs.append(message)
 
+        def warning(self, *args: Any) -> None:
+            self.warnings.append(args)
+
     class AstrMessageEvent:
         pass
+
+    class MessageChain:
+        def __init__(self, chain: list[Any] | None = None) -> None:
+            self.chain = list(chain or [])
+
+        def message(self, text: str):
+            self.chain.append(text)
+            return self
+
+    class At:
+        def __init__(self, qq: str) -> None:
+            self.qq = qq
+
+    class Plain:
+        def __init__(self, text: str) -> None:
+            self.text = text
 
     class CommandGroup:
         def __init__(self, name: str) -> None:
@@ -81,7 +103,11 @@ def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
             return decorator
 
     class Context:
-        pass
+        def __init__(self) -> None:
+            self.sent_messages: list[tuple[str, Any]] = []
+
+        async def send_message(self, target_umo: str, chain: Any) -> None:
+            self.sent_messages.append((target_umo, chain))
 
     class Star:
         def __init__(self, context: Context) -> None:
@@ -94,7 +120,10 @@ def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
     api.logger = Logger()
     astrbot_path.get_astrbot_plugin_data_path = get_astrbot_plugin_data_path
     event_module.AstrMessageEvent = AstrMessageEvent
+    event_module.MessageChain = MessageChain
     event_module.filter = Filter()
+    components_module.At = At
+    components_module.Plain = Plain
     star_module.Context = Context
     star_module.Star = Star
 
@@ -104,6 +133,7 @@ def install_astrbot_stubs(monkeypatch, plugin_data_path: Path | None = None):
     monkeypatch.setitem(sys.modules, "astrbot.core.utils", core_utils)
     monkeypatch.setitem(sys.modules, "astrbot.core.utils.astrbot_path", astrbot_path)
     monkeypatch.setitem(sys.modules, "astrbot.api.event", event_module)
+    monkeypatch.setitem(sys.modules, "astrbot.api.message_components", components_module)
     monkeypatch.setitem(sys.modules, "astrbot.api.star", star_module)
 
     sys.modules.pop("main", None)
@@ -244,3 +274,123 @@ async def test_unknown_event_errors_are_reported_without_persisting(monkeypatch,
     assert enabled == [expected]
     assert disabled == [expected]
     assert config.save_count == 0
+
+
+async def test_poll_loop_sends_rendered_subscription_messages(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch, tmp_path / "plugin_data")
+    context = module.Context()
+    config = module.AstrBotConfig(
+        {
+            "message_limits": {"message_send_delay_seconds": 0},
+            "subscriptions": [
+                {
+                    "target_umo": "umo-a",
+                    "repo": "Owner/Repo",
+                    "enabled": True,
+                    "events": {"issue": True},
+                    "template_overrides": {"issue": "Issue {number}: {title}"},
+                }
+            ],
+        }
+    )
+    plugin = module.GitHubSubscriberPlugin(context, config)
+    save_count = 0
+
+    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+        assert sub["repo"] == "Owner/Repo"
+        state["touched"] = True
+        return [
+            {
+                "target_umo": "umo-a",
+                "template_name": "issue",
+                "variables": {"number": 7, "title": "Hello"},
+                "mention_qq": "10001",
+            }
+        ]
+
+    async def one_tick_sleep(_seconds: float):
+        if not hasattr(one_tick_sleep, "called"):
+            one_tick_sleep.called = True
+            return
+        raise asyncio.CancelledError
+
+    def fake_save() -> None:
+        nonlocal save_count
+        save_count += 1
+
+    monkeypatch.setattr(module, "poll_subscription_once", fake_poll_subscription_once)
+    monkeypatch.setattr(module.asyncio, "sleep", one_tick_sleep)
+    monkeypatch.setattr(plugin.state, "save", fake_save)
+
+    try:
+        await plugin._poll_loop()
+    except asyncio.CancelledError:
+        pass
+
+    assert save_count == 1
+    assert len(context.sent_messages) == 1
+    target_umo, chain = context.sent_messages[0]
+    assert target_umo == "umo-a"
+    assert chain.chain[0].qq == "10001"
+    assert chain.chain[1] == "Issue 7: Hello"
+    sub_state = plugin.state.get_subscription_state("umo-a", "Owner/Repo")
+    assert sub_state["touched"] is True
+
+
+async def test_poll_loop_warns_and_continues_after_github_api_error(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch, tmp_path / "plugin_data")
+    context = module.Context()
+    config = module.AstrBotConfig(
+        {
+            "message_limits": {"message_send_delay_seconds": 0},
+            "global_templates": {"issue": "{title}"},
+            "subscriptions": [
+                {
+                    "target_umo": "umo-a",
+                    "repo": "Owner/Fail",
+                    "enabled": True,
+                    "events": {"issue": True},
+                    "template_overrides": {},
+                },
+                {
+                    "target_umo": "umo-b",
+                    "repo": "Owner/Ok",
+                    "enabled": True,
+                    "events": {"issue": True},
+                    "template_overrides": {},
+                },
+            ],
+        }
+    )
+    plugin = module.GitHubSubscriberPlugin(context, config)
+
+    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+        if sub["repo"] == "Owner/Fail":
+            raise module.GitHubApiError(500, "boom")
+        return [
+            {
+                "target_umo": sub["target_umo"],
+                "template_name": "_raw",
+                "variables": {"text": f"{sub['repo']} ok"},
+                "mention_qq": "",
+            }
+        ]
+
+    async def one_tick_sleep(_seconds: float):
+        if not hasattr(one_tick_sleep, "called"):
+            one_tick_sleep.called = True
+            return
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(module, "poll_subscription_once", fake_poll_subscription_once)
+    monkeypatch.setattr(module.asyncio, "sleep", one_tick_sleep)
+
+    try:
+        await plugin._poll_loop()
+    except asyncio.CancelledError:
+        pass
+
+    assert context.sent_messages[0][0] == "umo-b"
+    assert context.sent_messages[0][1].chain == ["Owner/Ok ok"]
+    assert module.logger.warnings
+    assert "Owner/Fail" in module.logger.warnings[0][1]

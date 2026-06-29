@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterator
 
-from .messages import normalize_github_login
+from .messages import build_issue_variables, build_star_variables, normalize_github_login
+from .templates import truncate_text
 
 
 @dataclass(frozen=True)
@@ -109,3 +110,203 @@ def collect_new_prs(
         skipped_opened_count=max(0, len(opened) - limit),
         skipped_merged_count=max(0, len(merged) - limit),
     )
+
+
+def _repo_parts(repo: str) -> tuple[str, str]:
+    return repo.split("/", 1)
+
+
+def _base_variables(repo: str) -> dict[str, Any]:
+    owner, repo_name = _repo_parts(repo)
+    return {
+        "repo": repo,
+        "repo_url": f"https://github.com/{repo}",
+        "owner": owner,
+        "repo_name": repo_name,
+    }
+
+
+def _release_variables(
+    repo: str,
+    item: dict[str, Any],
+    max_chars: int,
+) -> dict[str, Any]:
+    variables = _base_variables(repo)
+    variables.update(
+        {
+            "tag_name": item.get("tag_name", ""),
+            "release_name": item.get("name") or item.get("tag_name", ""),
+            "release_author": (item.get("author") or {}).get("login", ""),
+            "release_time": item.get("published_at") or item.get("created_at") or "",
+            "release_url": item.get("html_url", ""),
+            "release_notes": truncate_text(item.get("body") or "", max_chars),
+        }
+    )
+    return variables
+
+
+def _pr_variables(
+    repo: str,
+    item: dict[str, Any],
+    max_chars: int,
+) -> dict[str, Any]:
+    variables = build_issue_variables(repo, item, max_chars)
+    variables.update(
+        {
+            "merged_by": (item.get("merged_by") or {}).get("login", ""),
+            "merged_at": item.get("merged_at") or "",
+            "mention": "",
+        }
+    )
+    return variables
+
+
+def _summary_message(
+    target_umo: str,
+    repo: str,
+    event_label: str,
+    max_items: int,
+    skipped_count: int,
+) -> dict[str, Any]:
+    return {
+        "target_umo": target_umo,
+        "template_name": "_raw",
+        "variables": {
+            "text": (
+                f"本轮 {repo} 新增 {event_label} 较多，"
+                f"已展示 {max_items} 条，还有 {skipped_count} 条未展示。"
+            )
+        },
+        "mention_qq": "",
+    }
+
+
+async def poll_subscription_once(
+    client: Any,
+    config: dict[str, Any],
+    sub: dict[str, Any],
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    repo = sub["repo"]
+    owner, name = _repo_parts(repo)
+    target_umo = sub["target_umo"]
+    events = sub.get("events") or {}
+    limits = config.get("message_limits") or {}
+    max_items = int(limits.get("max_items_per_event_cycle", 5))
+    issue_chars = int(limits.get("issue_body_summary_chars", 300))
+    pr_chars = int(limits.get("pr_body_summary_chars", 300))
+    release_chars = int(limits.get("release_notes_max_chars", 1500))
+    messages: list[dict[str, Any]] = []
+
+    if events.get("star"):
+        stargazers = await client.get_stargazers(owner, name)
+        repo_meta = await client.get_repo(owner, name)
+        new_users = collect_new_stars(state, stargazers)
+        if new_users:
+            messages.append(
+                {
+                    "target_umo": target_umo,
+                    "template_name": "star",
+                    "variables": build_star_variables(
+                        repo=repo,
+                        repo_url=f"https://github.com/{repo}",
+                        star_count=int(repo_meta.get("stargazers_count") or 0),
+                        new_users=new_users,
+                    ),
+                    "mention_qq": "",
+                }
+            )
+
+    if events.get("release"):
+        releases = await client.get_releases(owner, name)
+        selected_release, _skipped_count = collect_new_releases(state, releases)
+        if selected_release:
+            messages.append(
+                {
+                    "target_umo": target_umo,
+                    "template_name": "release",
+                    "variables": _release_variables(repo, selected_release, release_chars),
+                    "mention_qq": "",
+                }
+            )
+
+    if events.get("issue"):
+        issues = await client.get_issues(owner, name)
+        selected_issues, skipped_count = collect_new_issues(
+            state,
+            issues,
+            limit=max_items,
+        )
+        for item in selected_issues:
+            messages.append(
+                {
+                    "target_umo": target_umo,
+                    "template_name": "issue",
+                    "variables": build_issue_variables(repo, item, issue_chars),
+                    "mention_qq": "",
+                }
+            )
+        if skipped_count:
+            messages.append(
+                _summary_message(target_umo, repo, "Issue", max_items, skipped_count)
+            )
+
+    if events.get("pr"):
+        open_prs = await client.get_pulls(owner, name, "open")
+        closed_prs = await client.get_pulls(owner, name, "closed")
+        result = collect_new_prs(
+            state,
+            open_prs=open_prs,
+            closed_prs=closed_prs,
+            limit=max_items,
+        )
+
+        for item in result.opened:
+            messages.append(
+                {
+                    "target_umo": target_umo,
+                    "template_name": "pr_opened",
+                    "variables": _pr_variables(repo, item, pr_chars),
+                    "mention_qq": "",
+                }
+            )
+        if result.skipped_opened_count:
+            messages.append(
+                _summary_message(
+                    target_umo,
+                    repo,
+                    "PR",
+                    max_items,
+                    result.skipped_opened_count,
+                )
+            )
+
+        github_to_qq = {
+            normalize_github_login(login): str(qq)
+            for login, qq in (config.get("github_to_qq") or {}).items()
+        }
+        for item in result.merged:
+            variables = _pr_variables(repo, item, pr_chars)
+            author_login = normalize_github_login(variables.get("author", ""))
+            mention_qq = github_to_qq.get(author_login, "")
+            variables["mention"] = " " if mention_qq else ""
+            messages.append(
+                {
+                    "target_umo": target_umo,
+                    "template_name": "pr_merged",
+                    "variables": variables,
+                    "mention_qq": mention_qq,
+                }
+            )
+        if result.skipped_merged_count:
+            messages.append(
+                _summary_message(
+                    target_umo,
+                    repo,
+                    "已合并 PR",
+                    max_items,
+                    result.skipped_merged_count,
+                )
+            )
+
+    return messages

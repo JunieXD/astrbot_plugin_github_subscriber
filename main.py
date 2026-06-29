@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star
 try:
     from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
@@ -22,7 +23,10 @@ from github_subscriber.config import (
     normalize_config,
     remove_subscription,
 )
+from github_subscriber.github_client import GitHubApiError, GitHubClient
+from github_subscriber.messages import render_text_message
 from github_subscriber.models import EVENT_KEYS
+from github_subscriber.poller import poll_subscription_once
 from github_subscriber.repo_parser import RepoParseError, parse_repo_ref
 from github_subscriber.state import JsonStateStore
 
@@ -177,7 +181,52 @@ class GitHubSubscriberPlugin(Star):
     async def _poll_loop(self):
         while True:
             await asyncio.sleep(60)
-            logger.debug("GitHub subscriber poll tick.")
+            async with GitHubClient(self.normalized_config.get("github_token", "")) as client:
+                for sub in list(self.normalized_config.get("subscriptions", [])):
+                    if not sub.get("enabled", True):
+                        continue
+                    sub_state = self.state.get_subscription_state(
+                        sub["target_umo"],
+                        sub["repo"],
+                    )
+                    try:
+                        messages = await poll_subscription_once(
+                            client,
+                            self.normalized_config,
+                            sub,
+                            sub_state,
+                        )
+                    except GitHubApiError as exc:
+                        logger.warning(
+                            "GitHub polling failed for %s: %s",
+                            sub.get("repo"),
+                            exc,
+                        )
+                        continue
+
+                    await self._send_subscription_messages(sub, messages)
+                    self.state.save()
+
+    async def _send_subscription_messages(
+        self,
+        sub: dict[str, Any],
+        messages: list[dict[str, Any]],
+    ) -> None:
+        delay_seconds = (self.normalized_config.get("message_limits") or {}).get(
+            "message_send_delay_seconds",
+            1,
+        )
+        for index, message in enumerate(messages):
+            text = render_text_message(
+                self.normalized_config,
+                sub,
+                message["template_name"],
+                message["variables"],
+            )
+            chain = _build_message_chain(text, message.get("mention_qq", ""))
+            await self.context.send_message(message["target_umo"], chain)
+            if index < len(messages) - 1:
+                await asyncio.sleep(delay_seconds)
 
     def _persist_config(self) -> None:
         self.config.clear()
@@ -198,3 +247,23 @@ class GitHubSubscriberPlugin(Star):
 
     def _supported_event_names_text(self) -> str:
         return "、".join(SUPPORTED_EVENT_NAMES)
+
+
+def _build_message_chain(text: str, mention_qq: str | None = "") -> MessageChain:
+    chain = MessageChain()
+    if mention_qq:
+        at_component = Comp.At(qq=str(mention_qq))
+        if hasattr(chain, "chain"):
+            chain.chain.append(at_component)
+        else:
+            try:
+                return MessageChain([at_component, Comp.Plain(text)])
+            except Exception:
+                pass
+    if hasattr(chain, "message"):
+        chain.message(text)
+    elif hasattr(chain, "chain"):
+        chain.chain.append(Comp.Plain(text))
+    else:
+        chain = MessageChain([Comp.Plain(text)])
+    return chain
