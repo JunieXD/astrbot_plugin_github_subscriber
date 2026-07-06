@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .config import normalize_github_to_qq
 from .messages import (
@@ -360,6 +360,7 @@ async def poll_subscription_once(
     state: dict[str, Any],
     *,
     now: datetime | None = None,
+    on_event_error: Callable[[str, Exception], None] | None = None,
 ) -> list[dict[str, Any]]:
     repo = sub["repo"]
     owner, name = _repo_parts(repo)
@@ -374,6 +375,18 @@ async def poll_subscription_once(
     working_state = deepcopy(state)
     messages: list[dict[str, Any]] = []
     subscription_created_at = _parse_checked_at(str(sub.get("created_at") or ""))
+
+    def rollback_event(
+        event_name: str,
+        exc: Exception,
+        snapshot: dict[str, Any],
+        message_count: int,
+    ) -> None:
+        working_state.clear()
+        working_state.update(snapshot)
+        del messages[message_count:]
+        if on_event_error is not None:
+            on_event_error(event_name, exc)
 
     if not working_state.get("initialized_at"):
         stargazers = await client.get_stargazers(owner, name)
@@ -397,164 +410,197 @@ async def poll_subscription_once(
         return []
 
     if events.get("star"):
-        if not _event_is_due(working_state, config, sub, "star", now):
-            _mark_event_enabled(working_state, "star", True)
-        elif not _previously_enabled(working_state, "star"):
-            stargazers = await client.get_stargazers(owner, name)
-            _baseline_stars(working_state, stargazers)
-            _mark_checked(working_state, "star", now)
-            _mark_event_enabled(working_state, "star", True)
-        else:
-            stargazers = await client.get_stargazers(owner, name)
-            repo_meta = await client.get_repo(owner, name)
-            new_users = collect_new_stars(working_state, stargazers)
-            if new_users:
-                messages.append(
-                    {
-                        "target_umo": target_umo,
-                        "template_name": "star",
-                        "variables": build_star_variables(
-                            repo=repo,
-                            repo_url=f"https://github.com/{repo}",
-                            star_count=int(repo_meta.get("stargazers_count") or 0),
-                            new_users=new_users,
-                        ),
-                        "mention_qq": "",
-                    }
-                )
-            _mark_checked(working_state, "star", now)
-            _mark_event_enabled(working_state, "star", True)
+        event_snapshot = deepcopy(working_state)
+        event_message_count = len(messages)
+        try:
+            if not _event_is_due(working_state, config, sub, "star", now):
+                _mark_event_enabled(working_state, "star", True)
+            elif not _previously_enabled(working_state, "star"):
+                stargazers = await client.get_stargazers(owner, name)
+                _baseline_stars(working_state, stargazers)
+                _mark_checked(working_state, "star", now)
+                _mark_event_enabled(working_state, "star", True)
+            else:
+                stargazers = await client.get_stargazers(owner, name)
+                repo_meta = await client.get_repo(owner, name)
+                new_users = collect_new_stars(working_state, stargazers)
+                if new_users:
+                    messages.append(
+                        {
+                            "target_umo": target_umo,
+                            "template_name": "star",
+                            "variables": build_star_variables(
+                                repo=repo,
+                                repo_url=f"https://github.com/{repo}",
+                                star_count=int(repo_meta.get("stargazers_count") or 0),
+                                new_users=new_users,
+                            ),
+                            "mention_qq": "",
+                        }
+                    )
+                _mark_checked(working_state, "star", now)
+                _mark_event_enabled(working_state, "star", True)
+        except Exception as exc:
+            rollback_event("star", exc, event_snapshot, event_message_count)
     else:
         _mark_event_enabled(working_state, "star", False)
 
     if events.get("release"):
-        if not _event_is_due(working_state, config, sub, "release", now):
-            _mark_event_enabled(working_state, "release", True)
-        elif not _previously_enabled(working_state, "release"):
-            releases = await client.get_releases(owner, name)
-            _baseline_releases(working_state, releases)
-            _mark_checked(working_state, "release", now)
-            _mark_event_enabled(working_state, "release", True)
-        else:
-            releases = await client.get_releases(owner, name)
-            selected_release, _skipped_count = collect_new_releases(working_state, releases)
-            if selected_release:
-                messages.append(
-                    {
-                        "target_umo": target_umo,
-                        "template_name": "release",
-                        "variables": _release_variables(repo, selected_release, release_chars),
-                        "mention_qq": "",
-                    }
+        event_snapshot = deepcopy(working_state)
+        event_message_count = len(messages)
+        try:
+            if not _event_is_due(working_state, config, sub, "release", now):
+                _mark_event_enabled(working_state, "release", True)
+            elif not _previously_enabled(working_state, "release"):
+                releases = await client.get_releases(owner, name)
+                _baseline_releases(working_state, releases)
+                _mark_checked(working_state, "release", now)
+                _mark_event_enabled(working_state, "release", True)
+            else:
+                releases = await client.get_releases(owner, name)
+                selected_release, _skipped_count = collect_new_releases(
+                    working_state,
+                    releases,
                 )
-            _mark_checked(working_state, "release", now)
-            _mark_event_enabled(working_state, "release", True)
+                if selected_release:
+                    messages.append(
+                        {
+                            "target_umo": target_umo,
+                            "template_name": "release",
+                            "variables": _release_variables(
+                                repo,
+                                selected_release,
+                                release_chars,
+                            ),
+                            "mention_qq": "",
+                        }
+                    )
+                _mark_checked(working_state, "release", now)
+                _mark_event_enabled(working_state, "release", True)
+        except Exception as exc:
+            rollback_event("release", exc, event_snapshot, event_message_count)
     else:
         _mark_event_enabled(working_state, "release", False)
 
     if events.get("issue"):
-        if not _event_is_due(working_state, config, sub, "issue", now):
-            _mark_event_enabled(working_state, "issue", True)
-        elif not _previously_enabled(working_state, "issue"):
-            issues = await client.get_issues(owner, name)
-            _baseline_issues(working_state, issues)
-            _mark_checked(working_state, "issue", now)
-            _mark_event_enabled(working_state, "issue", True)
-        else:
-            issues = await client.get_issues(owner, name)
-            selected_issues, skipped_count = collect_new_issues(
-                working_state,
-                issues,
-                limit=max_items,
-            )
-            for item in selected_issues:
-                messages.append(
-                    {
-                        "target_umo": target_umo,
-                        "template_name": "issue",
-                        "variables": build_issue_variables(repo, item, issue_chars),
-                        "mention_qq": "",
-                    }
+        event_snapshot = deepcopy(working_state)
+        event_message_count = len(messages)
+        try:
+            if not _event_is_due(working_state, config, sub, "issue", now):
+                _mark_event_enabled(working_state, "issue", True)
+            elif not _previously_enabled(working_state, "issue"):
+                issues = await client.get_issues(owner, name)
+                _baseline_issues(working_state, issues)
+                _mark_checked(working_state, "issue", now)
+                _mark_event_enabled(working_state, "issue", True)
+            else:
+                issues = await client.get_issues(owner, name)
+                selected_issues, skipped_count = collect_new_issues(
+                    working_state,
+                    issues,
+                    limit=max_items,
                 )
-            if skipped_count:
-                messages.append(
-                    _summary_message(target_umo, repo, "Issue", max_items, skipped_count)
-                )
-            _mark_checked(working_state, "issue", now)
-            _mark_event_enabled(working_state, "issue", True)
+                for item in selected_issues:
+                    messages.append(
+                        {
+                            "target_umo": target_umo,
+                            "template_name": "issue",
+                            "variables": build_issue_variables(repo, item, issue_chars),
+                            "mention_qq": "",
+                        }
+                    )
+                if skipped_count:
+                    messages.append(
+                        _summary_message(
+                            target_umo,
+                            repo,
+                            "Issue",
+                            max_items,
+                            skipped_count,
+                        )
+                    )
+                _mark_checked(working_state, "issue", now)
+                _mark_event_enabled(working_state, "issue", True)
+        except Exception as exc:
+            rollback_event("issue", exc, event_snapshot, event_message_count)
     else:
         _mark_event_enabled(working_state, "issue", False)
 
     if events.get("pr"):
-        if not _event_is_due(working_state, config, sub, "pr", now):
-            _mark_event_enabled(working_state, "pr", True)
-        elif not _previously_enabled(working_state, "pr"):
-            open_prs = await client.get_pulls(owner, name, "open")
-            closed_prs = await client.get_pulls(owner, name, "closed")
-            _baseline_prs(working_state, open_prs=open_prs, closed_prs=closed_prs)
-            _mark_checked(working_state, "pr", now)
-            _mark_event_enabled(working_state, "pr", True)
-        else:
-            open_prs = await client.get_pulls(owner, name, "open")
-            closed_prs = await client.get_pulls(owner, name, "closed")
-            result = collect_new_prs(
-                working_state,
-                open_prs=open_prs,
-                closed_prs=closed_prs,
-                limit=max_items,
-            )
-
-            for item in result.opened:
-                messages.append(
-                    {
-                        "target_umo": target_umo,
-                        "template_name": "pr_opened",
-                        "variables": _pr_variables(repo, item, pr_chars),
-                        "mention_qq": "",
-                    }
-                )
-            if result.skipped_opened_count:
-                messages.append(
-                    _summary_message(
-                        target_umo,
-                        repo,
-                        "PR",
-                        max_items,
-                        result.skipped_opened_count,
-                    )
+        event_snapshot = deepcopy(working_state)
+        event_message_count = len(messages)
+        try:
+            if not _event_is_due(working_state, config, sub, "pr", now):
+                _mark_event_enabled(working_state, "pr", True)
+            elif not _previously_enabled(working_state, "pr"):
+                open_prs = await client.get_pulls(owner, name, "open")
+                closed_prs = await client.get_pulls(owner, name, "closed")
+                _baseline_prs(working_state, open_prs=open_prs, closed_prs=closed_prs)
+                _mark_checked(working_state, "pr", now)
+                _mark_event_enabled(working_state, "pr", True)
+            else:
+                open_prs = await client.get_pulls(owner, name, "open")
+                closed_prs = await client.get_pulls(owner, name, "closed")
+                result = collect_new_prs(
+                    working_state,
+                    open_prs=open_prs,
+                    closed_prs=closed_prs,
+                    limit=max_items,
                 )
 
-            github_to_qq = {
-                normalize_github_login(login): str(qq)
-                for login, qq in normalize_github_to_qq(
-                    config.get("github_to_qq")
-                ).items()
-            }
-            for item in result.merged:
-                variables = _pr_variables(repo, item, pr_chars)
-                author_login = normalize_github_login(variables.get("author", ""))
-                mention_qq = github_to_qq.get(author_login, "")
-                variables["mention"] = " " if mention_qq else ""
-                messages.append(
-                    {
-                        "target_umo": target_umo,
-                        "template_name": "pr_merged",
-                        "variables": variables,
-                        "mention_qq": mention_qq,
-                    }
-                )
-            if result.skipped_merged_count:
-                messages.append(
-                    _summary_message(
-                        target_umo,
-                        repo,
-                        "已合并 PR",
-                        max_items,
-                        result.skipped_merged_count,
+                for item in result.opened:
+                    messages.append(
+                        {
+                            "target_umo": target_umo,
+                            "template_name": "pr_opened",
+                            "variables": _pr_variables(repo, item, pr_chars),
+                            "mention_qq": "",
+                        }
                     )
-                )
-            _mark_checked(working_state, "pr", now)
-            _mark_event_enabled(working_state, "pr", True)
+                if result.skipped_opened_count:
+                    messages.append(
+                        _summary_message(
+                            target_umo,
+                            repo,
+                            "PR",
+                            max_items,
+                            result.skipped_opened_count,
+                        )
+                    )
+
+                github_to_qq = {
+                    normalize_github_login(login): str(qq)
+                    for login, qq in normalize_github_to_qq(
+                        config.get("github_to_qq")
+                    ).items()
+                }
+                for item in result.merged:
+                    variables = _pr_variables(repo, item, pr_chars)
+                    author_login = normalize_github_login(variables.get("author", ""))
+                    mention_qq = github_to_qq.get(author_login, "")
+                    variables["mention"] = " " if mention_qq else ""
+                    messages.append(
+                        {
+                            "target_umo": target_umo,
+                            "template_name": "pr_merged",
+                            "variables": variables,
+                            "mention_qq": mention_qq,
+                        }
+                    )
+                if result.skipped_merged_count:
+                    messages.append(
+                        _summary_message(
+                            target_umo,
+                            repo,
+                            "已合并 PR",
+                            max_items,
+                            result.skipped_merged_count,
+                        )
+                    )
+                _mark_checked(working_state, "pr", now)
+                _mark_event_enabled(working_state, "pr", True)
+        except Exception as exc:
+            rollback_event("pr", exc, event_snapshot, event_message_count)
     else:
         _mark_event_enabled(working_state, "pr", False)
 

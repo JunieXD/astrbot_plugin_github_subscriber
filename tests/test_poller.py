@@ -14,6 +14,7 @@ class FakeGitHubClient:
         self.stargazers: list[dict] = []
         self.repo_meta: dict = {"stargazers_count": 0}
         self.releases: list[dict] = []
+        self.release_error: Exception | None = None
         self.issues: list[dict] = []
         self.pulls: dict[str, list[dict]] = {"open": [], "closed": []}
         self.pull_errors: dict[str, Exception] = {}
@@ -28,6 +29,8 @@ class FakeGitHubClient:
 
     async def get_releases(self, owner: str, repo: str) -> list[dict]:
         self.calls.append(("get_releases", owner, repo))
+        if self.release_error is not None:
+            raise self.release_error
         return self.releases
 
     async def get_issues(self, owner: str, repo: str) -> list[dict]:
@@ -460,7 +463,7 @@ async def test_initial_baseline_keeps_post_subscription_issue_for_notification()
     assert state["notified_issue_numbers"] == [1, 2]
 
 
-async def test_poll_subscription_once_does_not_mutate_state_when_later_api_fails():
+async def test_poll_subscription_once_keeps_successful_events_when_later_api_fails():
     from github_subscriber import poller
 
     client = FakeGitHubClient()
@@ -481,29 +484,71 @@ async def test_poll_subscription_once_does_not_mutate_state_when_later_api_fails
         "notified_pr_numbers": [],
         "notified_merged_pr_numbers": [],
     }
-    before = {
-        "initialized_at": "2026-06-28T00:00:00Z",
-        "notified_issue_numbers": [],
-        "notified_pr_numbers": [],
-        "notified_merged_pr_numbers": [],
-    }
+    event_errors = []
 
-    try:
-        await poller.poll_subscription_once(
-            client,
-            poller_config(),
-            subscription({"issue": True, "pr": True}),
-            state,
-        )
-    except RuntimeError as exc:
-        assert str(exc) == "pulls failed"
-    else:
-        raise AssertionError("poll_subscription_once should re-raise API failures")
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(),
+        subscription({"issue": True, "pr": True}),
+        state,
+        on_event_error=lambda event_name, exc: event_errors.append(
+            (event_name, str(exc))
+        ),
+    )
 
-    assert state == before
+    assert [message["template_name"] for message in messages] == ["issue"]
+    assert state["notified_issue_numbers"] == [10]
+    assert state["notified_pr_numbers"] == []
+    assert state["notified_merged_pr_numbers"] == []
+    assert event_errors == [("pr", "pulls failed")]
     assert client.calls == [
         ("get_issues", "Owner", "Repo"),
         ("get_pulls", "Owner", "Repo", "open"),
+    ]
+
+
+async def test_poll_subscription_once_keeps_star_message_when_release_fails():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.stargazers = [
+        {"user": {"login": "alice"}, "starred_at": "2026-06-01T00:00:00Z"},
+        {"user": {"login": "bob"}, "starred_at": "2026-06-02T00:00:00Z"},
+    ]
+    client.repo_meta = {"stargazers_count": 2}
+    client.release_error = RuntimeError("releases failed")
+    state = initialized_state(
+        known_star_users=["alice"],
+        notified_release_ids=[],
+        last_checked_at={
+            "star": "2026-06-29T00:00:00+00:00",
+            "release": "2026-06-29T00:00:00+00:00",
+        },
+        event_enabled={"star": True, "release": True},
+    )
+    event_errors = []
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        subscription({"star": True, "release": True}),
+        state,
+        now=datetime(2026, 6, 29, 0, 10, tzinfo=timezone.utc),
+        on_event_error=lambda event_name, exc: event_errors.append(
+            (event_name, str(exc))
+        ),
+    )
+
+    assert [message["template_name"] for message in messages] == ["star"]
+    assert messages[0]["variables"]["new_star_count"] == 1
+    assert messages[0]["variables"]["star_users"] == "bob"
+    assert state["known_star_users"] == ["alice", "bob"]
+    assert state["notified_release_ids"] == []
+    assert event_errors == [("release", "releases failed")]
+    assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_repo", "Owner", "Repo"),
+        ("get_releases", "Owner", "Repo"),
     ]
 
 

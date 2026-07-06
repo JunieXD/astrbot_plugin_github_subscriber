@@ -222,12 +222,23 @@ class GitHubSubscriberPlugin(Star):
                     )
                     state_before_poll = deepcopy(sub_state)
                     try:
+                        event_errors: list[tuple[str, Exception]] = []
                         messages = await poll_subscription_once(
                             client,
                             self.normalized_config,
                             sub,
                             sub_state,
+                            on_event_error=lambda event_name, exc: event_errors.append(
+                                (event_name, exc)
+                            ),
                         )
+                        for event_name, exc in event_errors:
+                            logger.warning(
+                                "GitHub subscriber %s event failed for %s: %s",
+                                event_name,
+                                sub.get("repo"),
+                                exc,
+                            )
                         await self._send_subscription_messages(sub, messages)
                     except Exception as exc:
                         sub_state.clear()

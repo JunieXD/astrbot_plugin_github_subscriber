@@ -396,7 +396,7 @@ async def test_poll_loop_sends_rendered_subscription_messages(monkeypatch, tmp_p
     plugin = module.GitHubSubscriberPlugin(context, config)
     save_count = 0
 
-    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+    async def fake_poll_subscription_once(client, normalized_config, sub, state, **_kwargs):
         assert sub["repo"] == "Owner/Repo"
         state["touched"] = True
         return [
@@ -454,7 +454,7 @@ async def test_poll_loop_polls_once_before_first_sleep(monkeypatch, tmp_path):
     plugin = module.GitHubSubscriberPlugin(context, config)
     sleep_calls: list[float] = []
 
-    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+    async def fake_poll_subscription_once(client, normalized_config, sub, state, **_kwargs):
         state["touched_before_sleep"] = True
         raise asyncio.CancelledError
 
@@ -502,7 +502,7 @@ async def test_poll_loop_warns_and_continues_after_github_api_error(monkeypatch,
     )
     plugin = module.GitHubSubscriberPlugin(context, config)
 
-    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+    async def fake_poll_subscription_once(client, normalized_config, sub, state, **_kwargs):
         if sub["repo"] == "Owner/Fail":
             state["notified_issue_numbers"] = [99]
             raise module.GitHubApiError(500, "boom")
@@ -558,7 +558,7 @@ async def test_poll_loop_rolls_back_state_when_send_fails(monkeypatch, tmp_path)
     plugin = module.GitHubSubscriberPlugin(context, config)
     save_count = 0
 
-    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+    async def fake_poll_subscription_once(client, normalized_config, sub, state, **_kwargs):
         state["notified_issue_numbers"] = [99]
         return [
             {
@@ -622,7 +622,7 @@ async def test_poll_loop_treats_unexpected_poll_errors_as_recoverable(monkeypatc
     )
     plugin = module.GitHubSubscriberPlugin(context, config)
 
-    async def fake_poll_subscription_once(client, normalized_config, sub, state):
+    async def fake_poll_subscription_once(client, normalized_config, sub, state, **_kwargs):
         if sub["repo"] == "Owner/Fail":
             state["notified_issue_numbers"] = [99]
             raise RuntimeError("network reset")
