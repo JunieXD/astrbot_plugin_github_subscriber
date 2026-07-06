@@ -9,6 +9,7 @@ from typing import Any
 DEFAULT_SUBSCRIPTION_STATE = {
     "initialized_at": "",
     "known_star_users": [],
+    "known_star_count": 0,
     "notified_release_ids": [],
     "notified_issue_numbers": [],
     "notified_pr_numbers": [],

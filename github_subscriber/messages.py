@@ -21,18 +21,28 @@ def build_star_variables(
     repo_url: str,
     star_count: int,
     new_users: list[str],
+    new_star_count: int | None = None,
 ) -> dict[str, Any]:
+    resolved_new_star_count = (
+        len(new_users) if new_star_count is None else new_star_count
+    )
     shown = new_users[:5]
     if len(new_users) > 5:
         star_users = f"{'、'.join(shown)} 等，共 {len(new_users)} 人"
-    else:
+    elif new_users:
         star_users = "、".join(shown)
+    elif resolved_new_star_count > 1:
+        star_users = f"未知用户，共 {resolved_new_star_count} 人"
+    elif resolved_new_star_count == 1:
+        star_users = "未知用户"
+    else:
+        star_users = ""
     return {
         "repo": repo,
         "repo_url": repo_url,
         "owner": repo.split("/", 1)[0],
         "repo_name": repo.split("/", 1)[1],
-        "new_star_count": len(new_users),
+        "new_star_count": resolved_new_star_count,
         "star_count": star_count,
         "star_users": star_users,
     }

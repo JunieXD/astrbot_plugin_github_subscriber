@@ -70,6 +70,19 @@ def test_build_star_variables_uses_all_names_when_five_or_fewer():
     assert variables["star_users"] == "a、b、c、d、e"
 
 
+def test_build_star_variables_supports_unknown_star_users():
+    variables = build_star_variables(
+        repo="Owner/Repo",
+        repo_url="https://github.com/Owner/Repo",
+        star_count=42,
+        new_users=[],
+        new_star_count=2,
+    )
+
+    assert variables["new_star_count"] == 2
+    assert variables["star_users"] == "未知用户，共 2 人"
+
+
 def test_normalize_github_login_strips_and_lowercases():
     assert normalize_github_login(" Alice ") == "alice"
 

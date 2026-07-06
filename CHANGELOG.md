@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.5
+
+- 修复 GitHub token 无法访问 stargazers API 时 Star 事件完全不推送的问题。
+- Star 用户明细不可用时，会改用仓库总 Star 数差值发送兜底提醒，并记录计数状态避免后续重复推送历史用户。
+
 ## v0.1.4
 
 - 默认将 Issue、PR、Release 相关时间显示为上海时间。

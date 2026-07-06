@@ -7,6 +7,7 @@
 - 支持公开 GitHub 仓库订阅。
 - 支持群聊和私聊目标，同一个仓库可以在不同会话中使用不同订阅配置。
 - 支持全局可选 GitHub token；不填写也可订阅公开仓库，填写后可提高 GitHub API 限流额度。
+- Star 用户明细不可用时，自动按仓库总 Star 数差值发送兜底提醒。
 - 支持按订阅项开关 Star、Release、Issue、PR 事件。
 - 支持全局消息模板，也支持单条订阅覆盖模板。
 - 支持 GitHub 用户名到 QQ UID 映射。
@@ -41,7 +42,7 @@
 
 主要配置项：
 
-- `github_token`：可选 GitHub token。公开 GitHub API 不配置 token 也可以使用，但限流较低；建议配置 token 提高稳定性。
+- `github_token`：可选 GitHub token。公开 GitHub API 不配置 token 也可以使用，但限流较低；建议配置 token 提高稳定性。若 token 未授权目标仓库或无法访问 stargazers API，Star 提醒会退化为仅按总数差值推送。
 - `github_to_qq`：GitHub 用户名到 QQ UID 的映射列表，用于 PR 合并提醒时 @ PR 作者。用户名匹配不区分大小写。
 - `global_templates`：全局默认消息模板，支持 `star`、`release`、`issue`、`pr_opened`、`pr_merged`。
 - `subscriptions`：订阅列表。每条订阅包含目标会话 `target_umo`、仓库 `repo`、订阅创建时间 `created_at`、启用状态、事件开关、轮询间隔和 `template_overrides`。
@@ -63,7 +64,7 @@
 
 - `{new_star_count}`：本轮新增 Star 数
 - `{star_count}`：当前仓库 Star 总数
-- `{star_users}`：本轮新增 Star 的 GitHub 用户名，最多展示 5 个，超过会显示总人数
+- `{star_users}`：本轮新增 Star 的 GitHub 用户名，最多展示 5 个，超过会显示总人数；如果 GitHub 未返回用户明细，会显示未知用户
 
 `release` 可使用：
 
@@ -109,5 +110,5 @@
 ## 注意事项
 
 - 本插件面向公开 GitHub 仓库订阅；私有仓库是否可访问取决于 token 权限和 GitHub API 返回结果。
-- 无 token 时公开 GitHub API 仍可用，但限流低，仓库较多或轮询较频繁时建议配置 `github_token`。
+- 无 token 时公开 GitHub API 仍可用，但限流低，仓库较多或轮询较频繁时建议配置 `github_token`。Star 用户明细依赖 GitHub stargazers API 权限，权限不足时插件仍会按总数变化推送。
 - 订阅目标按 AstrBot 的 `target_umo` 隔离，同一仓库在不同群聊或私聊中会拥有独立事件开关、模板和去重状态。

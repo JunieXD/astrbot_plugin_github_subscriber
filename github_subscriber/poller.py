@@ -42,7 +42,17 @@ def collect_new_stars(
             known.add(normalized)
             new_users.append(login)
             state["known_star_users"].append(login)
+    _remember_star_count(
+        state,
+        max(_remembered_star_count(state), len(state["known_star_users"])),
+    )
     return new_users
+
+
+def collect_new_star_count(state: dict[str, Any], star_count: int) -> int:
+    previous_count = _remembered_star_count(state)
+    _remember_star_count(state, star_count)
+    return max(0, star_count - previous_count)
 
 
 def collect_new_releases(
@@ -125,6 +135,7 @@ def initialize_baseline(
     state: dict[str, Any],
     *,
     stargazers: list[dict[str, Any]],
+    star_count: int | None = None,
     releases: list[dict[str, Any]],
     issues: list[dict[str, Any]],
     open_prs: list[dict[str, Any]],
@@ -139,6 +150,10 @@ def initialize_baseline(
         for item in stargazers
         if (item.get("user") or {}).get("login")
     ]
+    _remember_star_count(
+        state,
+        star_count if star_count is not None else len(state["known_star_users"]),
+    )
     state["notified_release_ids"] = [
         item["id"]
         for item in releases
@@ -315,12 +330,55 @@ def _mark_event_enabled(working_state: dict[str, Any], event_name: str, enabled:
     working_state.setdefault("event_enabled", {})[event_name] = enabled
 
 
-def _baseline_stars(working_state: dict[str, Any], stargazers: list[dict[str, Any]]) -> None:
+def _coerce_non_negative_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _remembered_star_count(working_state: dict[str, Any]) -> int:
+    users_count = len(working_state.get("known_star_users") or [])
+    if "known_star_count" not in working_state:
+        return users_count
+    return max(
+        _coerce_non_negative_int(working_state.get("known_star_count")),
+        users_count,
+    )
+
+
+def _remember_star_count(working_state: dict[str, Any], star_count: int) -> None:
+    working_state["known_star_count"] = _coerce_non_negative_int(star_count)
+
+
+def _has_complete_star_users(working_state: dict[str, Any]) -> bool:
+    if "known_star_count" not in working_state:
+        return True
+    return len(working_state.get("known_star_users") or []) >= _remembered_star_count(
+        working_state
+    )
+
+
+def _repo_star_count(repo_meta: dict[str, Any], fallback: int = 0) -> int:
+    return _coerce_non_negative_int(repo_meta.get("stargazers_count"), fallback)
+
+
+def _baseline_stars(
+    working_state: dict[str, Any],
+    stargazers: list[dict[str, Any]],
+    star_count: int | None = None,
+) -> None:
     working_state["known_star_users"] = [
         (item.get("user") or {}).get("login", "")
         for item in stargazers
         if (item.get("user") or {}).get("login")
     ]
+    _remember_star_count(
+        working_state,
+        star_count
+        if star_count is not None
+        else len(working_state["known_star_users"]),
+    )
 
 
 def _baseline_releases(working_state: dict[str, Any], releases: list[dict[str, Any]]) -> None:
@@ -389,7 +447,16 @@ async def poll_subscription_once(
             on_event_error(event_name, exc)
 
     if not working_state.get("initialized_at"):
-        stargazers = await client.get_stargazers(owner, name)
+        star_count: int | None = None
+        try:
+            stargazers = await client.get_stargazers(owner, name)
+        except Exception:
+            repo_meta = await client.get_repo(owner, name)
+            star_count = _repo_star_count(
+                repo_meta,
+                _remembered_star_count(working_state),
+            )
+            stargazers = []
         releases = await client.get_releases(owner, name)
         issues = await client.get_issues(owner, name)
         open_prs = await client.get_pulls(owner, name, "open")
@@ -397,6 +464,7 @@ async def poll_subscription_once(
         initialize_baseline(
             working_state,
             stargazers=stargazers,
+            star_count=star_count,
             releases=releases,
             issues=issues,
             open_prs=open_prs,
@@ -416,28 +484,79 @@ async def poll_subscription_once(
             if not _event_is_due(working_state, config, sub, "star", now):
                 _mark_event_enabled(working_state, "star", True)
             elif not _previously_enabled(working_state, "star"):
-                stargazers = await client.get_stargazers(owner, name)
-                _baseline_stars(working_state, stargazers)
+                try:
+                    stargazers = await client.get_stargazers(owner, name)
+                except Exception:
+                    repo_meta = await client.get_repo(owner, name)
+                    _remember_star_count(
+                        working_state,
+                        _repo_star_count(
+                            repo_meta,
+                            _remembered_star_count(working_state),
+                        ),
+                    )
+                else:
+                    repo_meta = await client.get_repo(owner, name)
+                    _baseline_stars(
+                        working_state,
+                        stargazers,
+                        _repo_star_count(repo_meta, len(stargazers)),
+                    )
                 _mark_checked(working_state, "star", now)
                 _mark_event_enabled(working_state, "star", True)
             else:
-                stargazers = await client.get_stargazers(owner, name)
-                repo_meta = await client.get_repo(owner, name)
-                new_users = collect_new_stars(working_state, stargazers)
-                if new_users:
-                    messages.append(
-                        {
-                            "target_umo": target_umo,
-                            "template_name": "star",
-                            "variables": build_star_variables(
-                                repo=repo,
-                                repo_url=f"https://github.com/{repo}",
-                                star_count=int(repo_meta.get("stargazers_count") or 0),
-                                new_users=new_users,
-                            ),
-                            "mention_qq": "",
-                        }
+                try:
+                    stargazers = await client.get_stargazers(owner, name)
+                except Exception:
+                    repo_meta = await client.get_repo(owner, name)
+                    star_count = _repo_star_count(
+                        repo_meta,
+                        _remembered_star_count(working_state),
                     )
+                    new_star_count = collect_new_star_count(working_state, star_count)
+                    if new_star_count:
+                        messages.append(
+                            {
+                                "target_umo": target_umo,
+                                "template_name": "star",
+                                "variables": build_star_variables(
+                                    repo=repo,
+                                    repo_url=f"https://github.com/{repo}",
+                                    star_count=star_count,
+                                    new_users=[],
+                                    new_star_count=new_star_count,
+                                ),
+                                "mention_qq": "",
+                            }
+                        )
+                else:
+                    repo_meta = await client.get_repo(owner, name)
+                    star_count = _repo_star_count(repo_meta, len(stargazers))
+                    if _has_complete_star_users(working_state):
+                        new_users = collect_new_stars(working_state, stargazers)
+                        _remember_star_count(working_state, star_count)
+                        new_star_count = len(new_users)
+                    else:
+                        new_star_count = collect_new_star_count(
+                            working_state, star_count
+                        )
+                        new_users = []
+                        _baseline_stars(working_state, stargazers, star_count)
+                    if new_star_count:
+                        messages.append(
+                            {
+                                "target_umo": target_umo,
+                                "template_name": "star",
+                                "variables": build_star_variables(
+                                    repo=repo,
+                                    repo_url=f"https://github.com/{repo}",
+                                    star_count=star_count,
+                                    new_users=new_users,
+                                    new_star_count=new_star_count,
+                                ),
+                                "mention_qq": "",
+                            }
+                        )
                 _mark_checked(working_state, "star", now)
                 _mark_event_enabled(working_state, "star", True)
         except Exception as exc:

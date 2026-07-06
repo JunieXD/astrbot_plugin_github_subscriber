@@ -2,6 +2,7 @@ from github_subscriber.poller import (
     collect_new_issues,
     collect_new_prs,
     collect_new_releases,
+    collect_new_star_count,
     collect_new_stars,
     initialize_baseline,
 )
@@ -12,6 +13,7 @@ class FakeGitHubClient:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.stargazers: list[dict] = []
+        self.stargazer_error: Exception | None = None
         self.repo_meta: dict = {"stargazers_count": 0}
         self.releases: list[dict] = []
         self.release_error: Exception | None = None
@@ -21,6 +23,8 @@ class FakeGitHubClient:
 
     async def get_stargazers(self, owner: str, repo: str) -> list[dict]:
         self.calls.append(("get_stargazers", owner, repo))
+        if self.stargazer_error is not None:
+            raise self.stargazer_error
         return self.stargazers
 
     async def get_repo(self, owner: str, repo: str) -> dict:
@@ -131,6 +135,15 @@ def test_collect_new_stars_ignores_known_users_case_insensitively():
 
     assert new_users == ["Bob"]
     assert state["known_star_users"] == ["Alice", "Bob"]
+
+
+def test_collect_new_star_count_updates_count_without_user_details():
+    state = {"known_star_users": ["alice", "bob"]}
+
+    assert collect_new_star_count(state, 4) == 2
+    assert state["known_star_count"] == 4
+    assert collect_new_star_count(state, 3) == 0
+    assert state["known_star_count"] == 3
 
 
 def test_collect_new_releases_returns_latest_only_and_marks_all_seen():
@@ -552,6 +565,80 @@ async def test_poll_subscription_once_keeps_star_message_when_release_fails():
     ]
 
 
+async def test_poll_subscription_once_uses_star_count_when_stargazers_fail():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.stargazer_error = RuntimeError("stargazers forbidden")
+    client.repo_meta = {"stargazers_count": 4}
+    state = initialized_state(
+        known_star_users=["alice", "bob"],
+        last_checked_at={"star": "2026-06-29T00:00:00+00:00"},
+        event_enabled={"star": True},
+    )
+    event_errors = []
+    now = datetime(2026, 6, 29, 0, 10, tzinfo=timezone.utc)
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        subscription({"star": True}),
+        state,
+        now=now,
+        on_event_error=lambda event_name, exc: event_errors.append(
+            (event_name, str(exc))
+        ),
+    )
+
+    assert [message["template_name"] for message in messages] == ["star"]
+    assert messages[0]["variables"]["new_star_count"] == 2
+    assert messages[0]["variables"]["star_count"] == 4
+    assert messages[0]["variables"]["star_users"] == "未知用户，共 2 人"
+    assert state["known_star_users"] == ["alice", "bob"]
+    assert state["known_star_count"] == 4
+    assert state["last_checked_at"]["star"] == now.isoformat()
+    assert event_errors == []
+    assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_repo", "Owner", "Repo"),
+    ]
+
+
+async def test_poll_subscription_once_baselines_users_after_count_only_star_state():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.stargazers = [
+        {"user": {"login": "alice"}, "starred_at": "2026-06-01T00:00:00Z"},
+        {"user": {"login": "bob"}, "starred_at": "2026-06-02T00:00:00Z"},
+        {"user": {"login": "carol"}, "starred_at": "2026-06-03T00:00:00Z"},
+        {"user": {"login": "dave"}, "starred_at": "2026-06-04T00:00:00Z"},
+    ]
+    client.repo_meta = {"stargazers_count": 4}
+    state = initialized_state(
+        known_star_users=["alice", "bob"],
+        known_star_count=4,
+        last_checked_at={"star": "2026-06-29T00:00:00+00:00"},
+        event_enabled={"star": True},
+    )
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        subscription({"star": True}),
+        state,
+        now=datetime(2026, 6, 29, 0, 10, tzinfo=timezone.utc),
+    )
+
+    assert messages == []
+    assert state["known_star_users"] == ["alice", "bob", "carol", "dave"]
+    assert state["known_star_count"] == 4
+    assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_repo", "Owner", "Repo"),
+    ]
+
+
 async def test_poll_subscription_once_does_not_mutate_state_when_baseline_api_fails():
     from github_subscriber import poller
 
@@ -767,6 +854,40 @@ async def test_poll_subscription_once_initializes_baseline_without_messages_then
     ]
 
 
+async def test_poll_subscription_once_initial_baseline_uses_star_count_fallback():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.stargazer_error = RuntimeError("stargazers forbidden")
+    client.repo_meta = {"stargazers_count": 4}
+    state = {"initialized_at": ""}
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(),
+        subscription({"star": True, "release": True, "issue": True, "pr": True}),
+        state,
+    )
+
+    assert messages == []
+    assert state["known_star_users"] == []
+    assert state["known_star_count"] == 4
+    assert state["event_enabled"] == {
+        "star": True,
+        "release": True,
+        "issue": True,
+        "pr": True,
+    }
+    assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_repo", "Owner", "Repo"),
+        ("get_releases", "Owner", "Repo"),
+        ("get_issues", "Owner", "Repo"),
+        ("get_pulls", "Owner", "Repo", "open"),
+        ("get_pulls", "Owner", "Repo", "closed"),
+    ]
+
+
 async def test_poll_subscription_once_baselines_disabled_events_before_star_is_enabled():
     from github_subscriber import poller
 
@@ -817,7 +938,10 @@ async def test_poll_subscription_once_baselines_disabled_events_before_star_is_e
 
     assert messages == []
     assert state["known_star_users"] == ["alice", "bob"]
-    assert client.calls == [("get_stargazers", "Owner", "Repo")]
+    assert client.calls == [
+        ("get_stargazers", "Owner", "Repo"),
+        ("get_repo", "Owner", "Repo"),
+    ]
 
 
 async def test_poll_subscription_once_pr_merged_mentions_mapped_author():
