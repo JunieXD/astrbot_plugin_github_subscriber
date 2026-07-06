@@ -83,6 +83,10 @@ class GitHubSubscriberPlugin(Star):
     async def on_loaded(self):
         self._ensure_poller_started()
 
+    @filter.on_plugin_loaded()
+    async def on_plugin_loaded(self, metadata: Any):
+        self._ensure_poller_started()
+
     @filter.permission_type(filter.PermissionType.ADMIN)
     @ghsub.command("help")
     async def ghsub_help(self, event: AstrMessageEvent):

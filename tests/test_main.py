@@ -103,6 +103,13 @@ def install_astrbot_stub_modules(monkeypatch, plugin_data_path: Path | None = No
 
             return decorator
 
+        def on_plugin_loaded(self):
+            def decorator(func):
+                func.__on_plugin_loaded__ = True
+                return func
+
+            return decorator
+
     class Context:
         def __init__(self) -> None:
             self.sent_messages: list[tuple[str, Any]] = []
@@ -300,6 +307,49 @@ async def test_ghsub_add_starts_poller_when_plugin_is_hot_loaded(monkeypatch, tm
     monkeypatch.setattr(module.asyncio, "create_task", fake_create_task)
 
     await collect_plain_result(plugin.ghsub_add(FakeEvent("umo-a"), "Owner/Repo"))
+
+    assert len(created_coroutines) == 1
+    assert plugin._poller_task is not None
+    plugin._poller_task.cancel()
+
+
+async def test_on_plugin_loaded_starts_poller_for_existing_subscriptions(monkeypatch, tmp_path):
+    module = install_astrbot_stubs(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    config = module.AstrBotConfig(
+        {
+            "subscriptions": [
+                {
+                    "target_umo": "umo-a",
+                    "repo": "Owner/Repo",
+                    "enabled": True,
+                    "events": {"star": True},
+                }
+            ],
+        }
+    )
+    plugin = module.GitHubSubscriberPlugin(module.Context(), config)
+    created_coroutines: list[Any] = []
+
+    class FakeTask:
+        def __init__(self, coroutine: Any) -> None:
+            self.coroutine = coroutine
+            self.cancelled = False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+            self.coroutine.close()
+
+        def done(self) -> bool:
+            return False
+
+    def fake_create_task(coroutine: Any) -> FakeTask:
+        created_coroutines.append(coroutine)
+        return FakeTask(coroutine)
+
+    monkeypatch.setattr(module.asyncio, "create_task", fake_create_task)
+
+    await plugin.on_plugin_loaded(object())
 
     assert len(created_coroutines) == 1
     assert plugin._poller_task is not None
