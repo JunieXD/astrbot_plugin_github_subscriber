@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterator
 
-from .config import normalize_github_to_qq
+from .config import normalize_github_to_qq, normalize_subscription_events
 from .messages import (
     build_issue_variables,
     build_star_variables,
@@ -100,9 +100,32 @@ def collect_new_prs(
     closed_prs: list[dict[str, Any]],
     limit: int,
 ) -> PrCollectionResult:
-    seen_opened = set(state.setdefault("notified_pr_numbers", []))
-    seen_merged = set(state.setdefault("notified_merged_pr_numbers", []))
+    opened, skipped_opened_count = collect_new_opened_prs(
+        state,
+        open_prs,
+        limit=limit,
+    )
+    merged, skipped_merged_count = collect_new_merged_prs(
+        state,
+        closed_prs,
+        limit=limit,
+    )
 
+    return PrCollectionResult(
+        opened=opened,
+        merged=merged,
+        skipped_opened_count=skipped_opened_count,
+        skipped_merged_count=skipped_merged_count,
+    )
+
+
+def collect_new_opened_prs(
+    state: dict[str, Any],
+    open_prs: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    seen_opened = set(state.setdefault("notified_pr_numbers", []))
     opened = [
         item
         for item in open_prs
@@ -111,6 +134,17 @@ def collect_new_prs(
     opened.sort(key=lambda row: row.get("created_at") or "", reverse=True)
     for item in opened:
         state["notified_pr_numbers"].append(item["number"])
+
+    return opened[:limit], max(0, len(opened) - limit)
+
+
+def collect_new_merged_prs(
+    state: dict[str, Any],
+    closed_prs: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    seen_merged = set(state.setdefault("notified_merged_pr_numbers", []))
 
     merged = [
         item
@@ -123,12 +157,7 @@ def collect_new_prs(
     for item in merged:
         state["notified_merged_pr_numbers"].append(item["number"])
 
-    return PrCollectionResult(
-        opened=opened[:limit],
-        merged=merged[:limit],
-        skipped_opened_count=max(0, len(opened) - limit),
-        skipped_merged_count=max(0, len(merged) - limit),
-    )
+    return merged[:limit], max(0, len(merged) - limit)
 
 
 def initialize_baseline(
@@ -296,7 +325,8 @@ def _event_interval_seconds(
     defaults = config.get("default_intervals") or {}
     intervals = {**defaults, **(sub.get("intervals") or {})}
     min_seconds = int(defaults.get("min_interval_seconds", 60) or 60)
-    minutes = int(intervals.get(f"{event_name}_minutes", 1) or 1)
+    interval_name = "pr" if event_name in {"pr_opened", "pr_merged"} else event_name
+    minutes = int(intervals.get(f"{interval_name}_minutes", 1) or 1)
     return max(minutes * 60, min_seconds)
 
 
@@ -307,7 +337,10 @@ def _event_is_due(
     event_name: str,
     now: datetime,
 ) -> bool:
-    last_checked = (working_state.get("last_checked_at") or {}).get(event_name)
+    last_checked_at = working_state.get("last_checked_at") or {}
+    last_checked = last_checked_at.get(event_name)
+    if not last_checked and event_name in {"pr_opened", "pr_merged"}:
+        last_checked = last_checked_at.get("pr")
     checked_at = _parse_checked_at(last_checked)
     if checked_at is None:
         return True
@@ -323,6 +356,10 @@ def _previously_enabled(working_state: dict[str, Any], event_name: str) -> bool:
     event_enabled = working_state.get("event_enabled")
     if not isinstance(event_enabled, dict):
         return True
+    if event_name in event_enabled:
+        return bool(event_enabled[event_name])
+    if event_name in {"pr_opened", "pr_merged"} and "pr" in event_enabled:
+        return bool(event_enabled["pr"])
     return bool(event_enabled.get(event_name, True))
 
 
@@ -395,15 +432,17 @@ def _baseline_issues(working_state: dict[str, Any], issues: list[dict[str, Any]]
     ]
 
 
-def _baseline_prs(
-    working_state: dict[str, Any],
-    *,
-    open_prs: list[dict[str, Any]],
-    closed_prs: list[dict[str, Any]],
+def _baseline_opened_prs(
+    working_state: dict[str, Any], open_prs: list[dict[str, Any]]
 ) -> None:
     working_state["notified_pr_numbers"] = [
         item["number"] for item in open_prs if item.get("number") is not None
     ]
+
+
+def _baseline_merged_prs(
+    working_state: dict[str, Any], closed_prs: list[dict[str, Any]]
+) -> None:
     working_state["notified_merged_pr_numbers"] = [
         item["number"]
         for item in closed_prs
@@ -423,7 +462,7 @@ async def poll_subscription_once(
     repo = sub["repo"]
     owner, name = _repo_parts(repo)
     target_umo = sub["target_umo"]
-    events = sub.get("events") or {}
+    events = normalize_subscription_events(sub.get("events"))
     now = now or datetime.now(timezone.utc)
     limits = config.get("message_limits") or {}
     max_items = int(limits.get("max_items_per_event_cycle", 5))
@@ -645,29 +684,25 @@ async def poll_subscription_once(
     else:
         _mark_event_enabled(working_state, "issue", False)
 
-    if events.get("pr"):
+    if events.get("pr_opened"):
         event_snapshot = deepcopy(working_state)
         event_message_count = len(messages)
         try:
-            if not _event_is_due(working_state, config, sub, "pr", now):
-                _mark_event_enabled(working_state, "pr", True)
-            elif not _previously_enabled(working_state, "pr"):
+            if not _previously_enabled(working_state, "pr_opened"):
                 open_prs = await client.get_pulls(owner, name, "open")
-                closed_prs = await client.get_pulls(owner, name, "closed")
-                _baseline_prs(working_state, open_prs=open_prs, closed_prs=closed_prs)
-                _mark_checked(working_state, "pr", now)
-                _mark_event_enabled(working_state, "pr", True)
+                _baseline_opened_prs(working_state, open_prs)
+                _mark_checked(working_state, "pr_opened", now)
+                _mark_event_enabled(working_state, "pr_opened", True)
+            elif not _event_is_due(working_state, config, sub, "pr_opened", now):
+                _mark_event_enabled(working_state, "pr_opened", True)
             else:
                 open_prs = await client.get_pulls(owner, name, "open")
-                closed_prs = await client.get_pulls(owner, name, "closed")
-                result = collect_new_prs(
+                opened, skipped_count = collect_new_opened_prs(
                     working_state,
-                    open_prs=open_prs,
-                    closed_prs=closed_prs,
+                    open_prs,
                     limit=max_items,
                 )
-
-                for item in result.opened:
+                for item in opened:
                     messages.append(
                         {
                             "target_umo": target_umo,
@@ -676,24 +711,48 @@ async def poll_subscription_once(
                             "mention_qq": "",
                         }
                     )
-                if result.skipped_opened_count:
+                if skipped_count:
                     messages.append(
                         _summary_message(
                             target_umo,
                             repo,
                             "PR",
                             max_items,
-                            result.skipped_opened_count,
+                            skipped_count,
                         )
                     )
+                _mark_checked(working_state, "pr_opened", now)
+                _mark_event_enabled(working_state, "pr_opened", True)
+        except Exception as exc:
+            rollback_event("pr_opened", exc, event_snapshot, event_message_count)
+    else:
+        _mark_event_enabled(working_state, "pr_opened", False)
 
+    if events.get("pr_merged"):
+        event_snapshot = deepcopy(working_state)
+        event_message_count = len(messages)
+        try:
+            if not _previously_enabled(working_state, "pr_merged"):
+                closed_prs = await client.get_pulls(owner, name, "closed")
+                _baseline_merged_prs(working_state, closed_prs)
+                _mark_checked(working_state, "pr_merged", now)
+                _mark_event_enabled(working_state, "pr_merged", True)
+            elif not _event_is_due(working_state, config, sub, "pr_merged", now):
+                _mark_event_enabled(working_state, "pr_merged", True)
+            else:
+                closed_prs = await client.get_pulls(owner, name, "closed")
+                merged, skipped_count = collect_new_merged_prs(
+                    working_state,
+                    closed_prs,
+                    limit=max_items,
+                )
                 github_to_qq = {
                     normalize_github_login(login): str(qq)
                     for login, qq in normalize_github_to_qq(
                         config.get("github_to_qq")
                     ).items()
                 }
-                for item in result.merged:
+                for item in merged:
                     variables = _pr_variables(repo, item, pr_chars)
                     author_login = normalize_github_login(variables.get("author", ""))
                     mention_qq = github_to_qq.get(author_login, "")
@@ -706,22 +765,22 @@ async def poll_subscription_once(
                             "mention_qq": mention_qq,
                         }
                     )
-                if result.skipped_merged_count:
+                if skipped_count:
                     messages.append(
                         _summary_message(
                             target_umo,
                             repo,
                             "已合并 PR",
                             max_items,
-                            result.skipped_merged_count,
+                            skipped_count,
                         )
                     )
-                _mark_checked(working_state, "pr", now)
-                _mark_event_enabled(working_state, "pr", True)
+                _mark_checked(working_state, "pr_merged", now)
+                _mark_event_enabled(working_state, "pr_merged", True)
         except Exception as exc:
-            rollback_event("pr", exc, event_snapshot, event_message_count)
+            rollback_event("pr_merged", exc, event_snapshot, event_message_count)
     else:
-        _mark_event_enabled(working_state, "pr", False)
+        _mark_event_enabled(working_state, "pr_merged", False)
 
     state.clear()
     state.update(working_state)

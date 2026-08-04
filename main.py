@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -26,11 +27,12 @@ try:
         remove_subscription,
     )
     from .github_subscriber.github_client import GitHubClient
-    from .github_subscriber.messages import render_text_message
-    from .github_subscriber.models import EVENT_KEYS
+    from .github_subscriber.messages import render_text_message, resolve_template
+    from .github_subscriber.models import EVENT_ALIASES, EVENT_KEYS
     from .github_subscriber.poller import poll_subscription_once
     from .github_subscriber.repo_parser import RepoParseError, parse_repo_ref
     from .github_subscriber.state import JsonStateStore
+    from .github_subscriber.templates import render_template
 except ImportError:  # pragma: no cover - supports direct local imports in tests/dev.
     from github_subscriber.config import (
         add_subscription,
@@ -42,13 +44,15 @@ except ImportError:  # pragma: no cover - supports direct local imports in tests
         remove_subscription,
     )
     from github_subscriber.github_client import GitHubClient
-    from github_subscriber.messages import render_text_message
-    from github_subscriber.models import EVENT_KEYS
+    from github_subscriber.messages import render_text_message, resolve_template
+    from github_subscriber.models import EVENT_ALIASES, EVENT_KEYS
     from github_subscriber.poller import poll_subscription_once
     from github_subscriber.repo_parser import RepoParseError, parse_repo_ref
     from github_subscriber.state import JsonStateStore
+    from github_subscriber.templates import render_template
 
-SUPPORTED_EVENT_NAMES = (*EVENT_KEYS, "all")
+SUPPORTED_EVENT_NAMES = (*EVENT_KEYS, *EVENT_ALIASES, "all")
+MENTION_PLACEHOLDER_PATTERN = re.compile(r"\{(mention|admin_mention)\}")
 
 
 @filter.command_group("ghsub")
@@ -62,9 +66,10 @@ class GitHubSubscriberPlugin(Star):
         self.config = config
         raw_config = dict(config)
         self.normalized_config: dict[str, Any] = normalize_config(raw_config)
-        if (
-            "github_to_qq" in raw_config
-            and raw_config.get("github_to_qq") != self.normalized_config.get("github_to_qq")
+        if any(
+            key in raw_config
+            and raw_config.get(key) != self.normalized_config.get(key)
+            for key in ("github_to_qq", "subscriptions")
         ):
             self._persist_config()
         self._poller_task: asyncio.Task | None = None
@@ -96,10 +101,11 @@ class GitHubSubscriberPlugin(Star):
             "/ghsub list\n"
             "/ghsub status JunieXD/AutoEmailSender\n"
             "/ghsub enable JunieXD/AutoEmailSender star\n"
-            "/ghsub disable JunieXD/AutoEmailSender issue\n"
+            "/ghsub disable JunieXD/AutoEmailSender pr_merged\n"
             "/ghsub remove JunieXD/AutoEmailSender\n\n"
-            "默认开启：Release、Issue、PR\n"
+            "默认开启：Release、Issue、新 PR、PR 合并\n"
             "默认关闭：Star\n"
+            "pr 可同时控制新 PR 和 PR 合并提醒。\n"
             "所有命令仅管理员可用。"
         )
 
@@ -122,7 +128,7 @@ class GitHubSubscriberPlugin(Star):
         self._ensure_poller_started()
         yield event.plain_result(
             f"已订阅 {sub['repo']}\n"
-            "已开启：Release、Issue、PR\n"
+            "已开启：Release、Issue、新 PR、PR 合并\n"
             "未开启：Star\n"
             f"可使用 /ghsub enable {sub['repo']} star 开启 Star 提醒"
         )
@@ -267,13 +273,11 @@ class GitHubSubscriberPlugin(Star):
             1,
         )
         for index, message in enumerate(messages):
-            text = render_text_message(
+            chain = _build_subscription_message_chain(
                 self.normalized_config,
                 sub,
-                message["template_name"],
-                message["variables"],
+                message,
             )
-            chain = _build_message_chain(text, message.get("mention_qq", ""))
             await self.context.send_message(message["target_umo"], chain)
             if index < len(messages) - 1:
                 await asyncio.sleep(delay_seconds)
@@ -316,3 +320,57 @@ def _build_message_chain(text: str, mention_qq: str | None = "") -> MessageChain
     else:
         chain = MessageChain([Comp.Plain(text)])
     return chain
+
+
+def _build_subscription_message_chain(
+    config: dict[str, Any],
+    sub: dict[str, Any],
+    message: dict[str, Any],
+) -> MessageChain:
+    template_name = message["template_name"]
+    variables = dict(message.get("variables") or {})
+    author_qq = str(message.get("mention_qq") or "").strip()
+
+    if template_name == "_raw":
+        text = render_text_message(config, sub, template_name, variables)
+        return _build_message_chain(text, author_qq)
+
+    template = resolve_template(config, sub, template_name)
+    admin_qq = str(sub.get("admin_qq_uid") or "").strip()
+    placeholder_names = set(MENTION_PLACEHOLDER_PATTERN.findall(template))
+    inline_mentions = {
+        "mention": author_qq,
+        "admin_mention": admin_qq,
+    }
+    has_inline_mention = any(inline_mentions[name] for name in placeholder_names)
+
+    if not has_inline_mention:
+        variables.setdefault("admin_mention", "")
+        text = render_template(template, variables)
+        fallback_author_qq = author_qq if "mention" not in placeholder_names else ""
+        return _build_message_chain(text, fallback_author_qq)
+
+    components: list[Any] = []
+    pending_text = ""
+    if author_qq and "mention" not in placeholder_names:
+        components.append(Comp.At(qq=author_qq))
+        pending_text = " "
+
+    cursor = 0
+    for match in MENTION_PLACEHOLDER_PATTERN.finditer(template):
+        pending_text += render_template(template[cursor : match.start()], variables)
+        mention_qq = inline_mentions[match.group(1)]
+        if mention_qq:
+            if pending_text:
+                components.append(Comp.Plain(pending_text))
+                pending_text = ""
+            components.append(Comp.At(qq=mention_qq))
+            following = template[match.end() : match.end() + 1]
+            if following == "{" or following.isalnum():
+                pending_text = " "
+        cursor = match.end()
+
+    pending_text += render_template(template[cursor:], variables)
+    if pending_text:
+        components.append(Comp.Plain(pending_text))
+    return MessageChain(components)

@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-EVENT_KEYS = ("star", "release", "issue", "pr")
+EVENT_KEYS = ("star", "release", "issue", "pr_opened", "pr_merged")
+EVENT_ALIASES = {"pr": ("pr_opened", "pr_merged")}
 
 
 @dataclass(frozen=True)

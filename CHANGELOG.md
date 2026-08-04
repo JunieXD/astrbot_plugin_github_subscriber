@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.6
+
+- 将新 PR 与 PR 合并提醒拆分为 `pr_opened`、`pr_merged` 两个独立开关，并自动迁移旧版 `pr` 配置。
+- 每条仓库订阅新增管理员 QQ 号配置，所有事件模板可通过 `{admin_mention}` 在指定位置 @ 管理员。
+- 两类 PR 事件分别轮询、记录启用状态和处理失败，单侧 GitHub API 请求失败不会阻断另一侧提醒。
+
 ## v0.1.5
 
 - 修复 GitHub token 无法访问 stargazers API 时 Star 事件完全不推送的问题。

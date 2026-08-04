@@ -96,6 +96,7 @@
   "global_templates": {
     "description": "全局默认消息模板",
     "type": "object",
+    "hint": "所有模板都可使用 {admin_mention} 在占位符位置 @ 当前仓库订阅配置的管理员。",
     "items": {
       "star": {
         "description": "Star 提醒模板",
@@ -151,6 +152,12 @@
             "default": "",
             "hint": "填写 owner/repo 或 GitHub 仓库链接，例如 JunieXD/AutoEmailSender 或 https://github.com/owner/repo。"
           },
+          "admin_qq_uid": {
+            "description": "管理员 QQ 号",
+            "type": "string",
+            "default": "",
+            "hint": "在消息模板中使用 {admin_mention} 时会 @ 这个 QQ 用户；留空则不 @。"
+          },
           "created_at": {
             "description": "订阅创建时间",
             "type": "string",
@@ -181,8 +188,13 @@
                 "type": "bool",
                 "default": true
               },
-              "pr": {
-                "description": "PR 事件",
+              "pr_opened": {
+                "description": "新 PR 事件",
+                "type": "bool",
+                "default": true
+              },
+              "pr_merged": {
+                "description": "PR 合并事件",
                 "type": "bool",
                 "default": true
               }
@@ -217,6 +229,7 @@
           "template_overrides": {
             "description": "此订阅的消息模板覆盖",
             "type": "object",
+            "hint": "所有模板都可使用 {admin_mention} 在占位符位置 @ 此订阅的管理员。",
             "items": {
               "star": {
                 "description": "Star 提醒模板覆盖",

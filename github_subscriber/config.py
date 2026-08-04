@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
-from .models import EVENT_KEYS
+from .models import EVENT_ALIASES, EVENT_KEYS
 
 
 DEFAULT_GLOBAL_TEMPLATES = {
@@ -40,7 +40,8 @@ DEFAULT_SUBSCRIPTION_EVENTS = {
     "star": False,
     "release": True,
     "issue": True,
-    "pr": True,
+    "pr_opened": True,
+    "pr_merged": True,
 }
 
 DEFAULT_TEMPLATE_OVERRIDES = {
@@ -92,6 +93,36 @@ def normalize_github_to_qq_entries(value: Any) -> list[dict[str, Any]]:
     return []
 
 
+def normalize_subscription_events(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+
+    events = deepcopy(value)
+    if "pr" in events:
+        legacy_pr_enabled = bool(events.pop("pr"))
+        events.setdefault("pr_opened", legacy_pr_enabled)
+        events.setdefault("pr_merged", legacy_pr_enabled)
+    return events
+
+
+def normalize_subscription_entries(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+
+    subscriptions: list[Any] = []
+    for item in value:
+        if not isinstance(item, dict):
+            subscriptions.append(deepcopy(item))
+            continue
+
+        sub = deepcopy(item)
+        sub["admin_qq_uid"] = str(sub.get("admin_qq_uid") or "").strip()
+        if "events" in sub:
+            sub["events"] = normalize_subscription_events(sub.get("events"))
+        subscriptions.append(sub)
+    return subscriptions
+
+
 def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
     config = deepcopy(DEFAULT_CONFIG)
     raw = raw or {}
@@ -102,7 +133,7 @@ def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
         else:
             config[key] = deepcopy(value)
 
-    config["subscriptions"] = list(config.get("subscriptions") or [])
+    config["subscriptions"] = normalize_subscription_entries(config.get("subscriptions"))
     config["github_to_qq"] = normalize_github_to_qq_entries(config.get("github_to_qq"))
     return config
 
@@ -122,6 +153,7 @@ def add_subscription(
         "target_umo": target_umo,
         "target_name": target_name,
         "repo": repo,
+        "admin_qq_uid": "",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "enabled": True,
         "events": deepcopy(DEFAULT_SUBSCRIPTION_EVENTS),
@@ -176,15 +208,27 @@ def _set_event_enabled(
     event_name: str,
     enabled: bool,
 ) -> bool:
-    if event_name != "all" and event_name not in EVENT_KEYS:
+    if (
+        event_name != "all"
+        and event_name not in EVENT_KEYS
+        and event_name not in EVENT_ALIASES
+    ):
         raise ValueError(f"Unknown event: {event_name}")
 
     sub = find_subscription(config, target_umo, repo)
     if sub is None:
         return False
 
-    events = sub.setdefault("events", deepcopy(DEFAULT_SUBSCRIPTION_EVENTS))
-    keys = EVENT_KEYS if event_name == "all" else (event_name,)
+    if "events" in sub:
+        events = normalize_subscription_events(sub.get("events"))
+        sub["events"] = events
+    else:
+        events = sub.setdefault("events", deepcopy(DEFAULT_SUBSCRIPTION_EVENTS))
+
+    if event_name == "all":
+        keys = EVENT_KEYS
+    else:
+        keys = EVENT_ALIASES.get(event_name, (event_name,))
     for key in keys:
         events[key] = enabled
     return True

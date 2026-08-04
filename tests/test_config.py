@@ -93,13 +93,15 @@ def test_add_subscription_defaults_events_and_target():
     assert sub["repo"] == "Owner/Repo"
     assert sub["__template_key"] == "subscription"
     assert sub["target_umo"] == "aiocqhttp:GroupMessage:123"
+    assert sub["admin_qq_uid"] == ""
     assert datetime.fromisoformat(sub["created_at"]).tzinfo == timezone.utc
     assert sub["enabled"] is True
     assert sub["events"] == {
         "star": False,
         "release": True,
         "issue": True,
-        "pr": True,
+        "pr_opened": True,
+        "pr_merged": True,
     }
     assert get_subscriptions_for_target(config, "aiocqhttp:GroupMessage:123") == [sub]
 
@@ -124,12 +126,21 @@ def test_enable_disable_and_remove_subscription():
 
     assert enable_event(config, "umo-missing", "Owner/Repo", "star") is False
 
+    assert disable_event(config, "umo-a", "Owner/Repo", "pr_opened") is True
+    assert config["subscriptions"][0]["events"]["pr_opened"] is False
+    assert config["subscriptions"][0]["events"]["pr_merged"] is True
+
+    assert disable_event(config, "umo-a", "Owner/Repo", "pr") is True
+    assert config["subscriptions"][0]["events"]["pr_opened"] is False
+    assert config["subscriptions"][0]["events"]["pr_merged"] is False
+
     assert disable_event(config, "umo-a", "Owner/Repo", "all") is True
     assert config["subscriptions"][0]["events"] == {
         "star": False,
         "release": False,
         "issue": False,
-        "pr": False,
+        "pr_opened": False,
+        "pr_merged": False,
     }
 
     assert disable_event(config, "umo-missing", "Owner/Repo", "all") is False
@@ -160,6 +171,42 @@ def test_normalize_config_coerces_subscriptions_to_list():
 
     add_subscription(config, "umo", "name", "Owner/Repo")
     assert len(config["subscriptions"]) == 1
+
+
+def test_normalize_config_migrates_legacy_pr_switch_and_admin_qq():
+    config = normalize_config(
+        {
+            "subscriptions": [
+                {
+                    "target_umo": "umo-a",
+                    "repo": "Owner/Repo",
+                    "events": {"issue": True, "pr": False},
+                },
+                {
+                    "target_umo": "umo-b",
+                    "repo": "Other/Repo",
+                    "admin_qq_uid": 10001,
+                    "events": {
+                        "pr": False,
+                        "pr_opened": True,
+                    },
+                },
+            ]
+        }
+    )
+
+    first, second = config["subscriptions"]
+    assert first["events"] == {
+        "issue": True,
+        "pr_opened": False,
+        "pr_merged": False,
+    }
+    assert first["admin_qq_uid"] == ""
+    assert second["events"] == {
+        "pr_opened": True,
+        "pr_merged": False,
+    }
+    assert second["admin_qq_uid"] == "10001"
 
 
 def test_normalize_config_copies_mutable_defaults():

@@ -66,7 +66,14 @@ def subscription(events: dict[str, bool] | None = None) -> dict:
     return {
         "target_umo": "aiocqhttp:GroupMessage:100",
         "repo": "Owner/Repo",
-        "events": events or {"star": False, "release": False, "issue": False, "pr": False},
+        "events": events
+        or {
+            "star": False,
+            "release": False,
+            "issue": False,
+            "pr_opened": False,
+            "pr_merged": False,
+        },
         "intervals": {
             "star_minutes": 1,
             "release_minutes": 5,
@@ -412,7 +419,15 @@ async def test_initial_baseline_records_current_event_switches():
     messages = await poller.poll_subscription_once(
         client,
         poller_config(default_intervals={"min_interval_seconds": 60}),
-        subscription({"star": False, "release": True, "issue": True, "pr": True}),
+        subscription(
+            {
+                "star": False,
+                "release": True,
+                "issue": True,
+                "pr_opened": True,
+                "pr_merged": True,
+            }
+        ),
         state,
         now=datetime(2026, 6, 29, 0, 0, tzinfo=timezone.utc),
     )
@@ -422,7 +437,8 @@ async def test_initial_baseline_records_current_event_switches():
         "star": False,
         "release": True,
         "issue": True,
-        "pr": True,
+        "pr_opened": True,
+        "pr_merged": True,
     }
 
 
@@ -491,6 +507,17 @@ async def test_poll_subscription_once_keeps_successful_events_when_later_api_fai
         }
     ]
     client.pull_errors["open"] = RuntimeError("pulls failed")
+    client.pulls["closed"] = [
+        {
+            "number": 11,
+            "title": "Merged after open API failure",
+            "user": {"login": "bob"},
+            "created_at": "2026-06-01T00:00:00Z",
+            "merged_at": "2026-06-02T00:00:00Z",
+            "html_url": "https://github.com/Owner/Repo/pull/11",
+            "body": "body",
+        }
+    ]
     state = {
         "initialized_at": "2026-06-28T00:00:00Z",
         "notified_issue_numbers": [],
@@ -502,21 +529,25 @@ async def test_poll_subscription_once_keeps_successful_events_when_later_api_fai
     messages = await poller.poll_subscription_once(
         client,
         poller_config(),
-        subscription({"issue": True, "pr": True}),
+        subscription({"issue": True, "pr_opened": True, "pr_merged": True}),
         state,
         on_event_error=lambda event_name, exc: event_errors.append(
             (event_name, str(exc))
         ),
     )
 
-    assert [message["template_name"] for message in messages] == ["issue"]
+    assert [message["template_name"] for message in messages] == [
+        "issue",
+        "pr_merged",
+    ]
     assert state["notified_issue_numbers"] == [10]
     assert state["notified_pr_numbers"] == []
-    assert state["notified_merged_pr_numbers"] == []
-    assert event_errors == [("pr", "pulls failed")]
+    assert state["notified_merged_pr_numbers"] == [11]
+    assert event_errors == [("pr_opened", "pulls failed")]
     assert client.calls == [
         ("get_issues", "Owner", "Repo"),
         ("get_pulls", "Owner", "Repo", "open"),
+        ("get_pulls", "Owner", "Repo", "closed"),
     ]
 
 
@@ -865,7 +896,15 @@ async def test_poll_subscription_once_initial_baseline_uses_star_count_fallback(
     messages = await poller.poll_subscription_once(
         client,
         poller_config(),
-        subscription({"star": True, "release": True, "issue": True, "pr": True}),
+        subscription(
+            {
+                "star": True,
+                "release": True,
+                "issue": True,
+                "pr_opened": True,
+                "pr_merged": True,
+            }
+        ),
         state,
     )
 
@@ -876,7 +915,8 @@ async def test_poll_subscription_once_initial_baseline_uses_star_count_fallback(
         "star": True,
         "release": True,
         "issue": True,
-        "pr": True,
+        "pr_opened": True,
+        "pr_merged": True,
     }
     assert client.calls == [
         ("get_stargazers", "Owner", "Repo"),
@@ -944,6 +984,69 @@ async def test_poll_subscription_once_baselines_disabled_events_before_star_is_e
     ]
 
 
+async def test_poll_subscription_once_pr_opened_switch_skips_closed_api():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.pulls["open"] = [
+        {
+            "number": 7,
+            "title": "New PR",
+            "user": {"login": "alice"},
+            "created_at": "2026-06-01T00:00:00Z",
+            "html_url": "https://github.com/Owner/Repo/pull/7",
+            "body": "body",
+        }
+    ]
+    client.pulls["closed"] = [
+        {
+            "number": 8,
+            "merged_at": "2026-06-02T00:00:00Z",
+        }
+    ]
+    state = initialized_state(
+        notified_pr_numbers=[],
+        notified_merged_pr_numbers=[],
+    )
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(),
+        subscription({"pr_opened": True, "pr_merged": False}),
+        state,
+    )
+
+    assert [message["template_name"] for message in messages] == ["pr_opened"]
+    assert state["notified_pr_numbers"] == [7]
+    assert state["notified_merged_pr_numbers"] == []
+    assert client.calls == [("get_pulls", "Owner", "Repo", "open")]
+
+
+async def test_pr_opened_switch_reuses_legacy_pr_state_when_reenabled():
+    from github_subscriber import poller
+
+    client = FakeGitHubClient()
+    client.pulls["open"] = [{"number": 7}]
+    state = initialized_state(
+        notified_pr_numbers=[],
+        event_enabled={"pr": False},
+        last_checked_at={"pr": "2026-06-29T00:00:00+00:00"},
+    )
+
+    messages = await poller.poll_subscription_once(
+        client,
+        poller_config(default_intervals={"min_interval_seconds": 60}),
+        subscription({"pr_opened": True}),
+        state,
+        now=datetime(2026, 6, 29, 0, 0, 30, tzinfo=timezone.utc),
+    )
+
+    assert messages == []
+    assert state["notified_pr_numbers"] == [7]
+    assert state["event_enabled"]["pr_opened"] is True
+    assert client.calls == [("get_pulls", "Owner", "Repo", "open")]
+
+
 async def test_poll_subscription_once_pr_merged_mentions_mapped_author():
     from github_subscriber import poller
 
@@ -965,7 +1068,7 @@ async def test_poll_subscription_once_pr_merged_mentions_mapped_author():
     messages = await poller.poll_subscription_once(
         client,
         poller_config(github_to_qq={"alice": "10001"}),
-        subscription({"pr": True}),
+        subscription({"pr_merged": True}),
         initialized_state(notified_pr_numbers=[], notified_merged_pr_numbers=[]),
     )
 
@@ -975,7 +1078,6 @@ async def test_poll_subscription_once_pr_merged_mentions_mapped_author():
     assert messages[0]["variables"]["author"] == "Alice"
     assert messages[0]["variables"]["merged_by"] == "maintainer"
     assert client.calls == [
-        ("get_pulls", "Owner", "Repo", "open"),
         ("get_pulls", "Owner", "Repo", "closed"),
     ]
 
@@ -1008,7 +1110,7 @@ async def test_poll_subscription_once_pr_merged_mentions_template_list_mapping()
                 }
             ]
         ),
-        subscription({"pr": True}),
+        subscription({"pr_merged": True}),
         initialized_state(notified_pr_numbers=[], notified_merged_pr_numbers=[]),
     )
 

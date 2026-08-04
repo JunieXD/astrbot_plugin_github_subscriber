@@ -8,10 +8,11 @@
 - 支持群聊和私聊目标，同一个仓库可以在不同会话中使用不同订阅配置。
 - 支持全局可选 GitHub token；不填写也可订阅公开仓库，填写后可提高 GitHub API 限流额度。
 - Star 用户明细不可用时，自动按仓库总 Star 数差值发送兜底提醒。
-- 支持按订阅项开关 Star、Release、Issue、PR 事件。
+- 支持按订阅项分别开关 Star、Release、Issue、新 PR、PR 合并事件。
 - 支持全局消息模板，也支持单条订阅覆盖模板。
 - 支持 GitHub 用户名到 QQ UID 映射。
 - 支持 PR 合并提醒时 @ PR 作者。
+- 支持为每条仓库订阅配置管理员 QQ，并通过模板占位符 @ 管理员。
 - 首次 baseline 只记录仓库现状，不发送历史消息。
 
 ## 命令
@@ -24,13 +25,13 @@
 /ghsub list
 /ghsub status owner/repo
 /ghsub remove owner/repo
-/ghsub enable owner/repo star|release|issue|pr|all
-/ghsub disable owner/repo star|release|issue|pr|all
+/ghsub enable owner/repo star|release|issue|pr_opened|pr_merged|pr|all
+/ghsub disable owner/repo star|release|issue|pr_opened|pr_merged|pr|all
 ```
 
 命令默认作用于当前会话：在群聊中执行时管理当前群，在私聊中执行时管理当前私聊。
 
-使用 `/ghsub add` 新增订阅时，默认开启 Release、Issue、PR 提醒，默认关闭 Star 提醒。需要 Star 提醒时，可执行：
+使用 `/ghsub add` 新增订阅时，默认开启 Release、Issue、新 PR、PR 合并提醒，默认关闭 Star 提醒。`pr` 是兼容别名，可同时控制 `pr_opened` 和 `pr_merged`；两个提醒也可单独开关。需要 Star 提醒时，可执行：
 
 ```text
 /ghsub enable owner/repo star
@@ -45,9 +46,11 @@
 - `github_token`：可选 GitHub token。公开 GitHub API 不配置 token 也可以使用，但限流较低；建议配置 token 提高稳定性。若 token 未授权目标仓库或无法访问 stargazers API，Star 提醒会退化为仅按总数差值推送。
 - `github_to_qq`：GitHub 用户名到 QQ UID 的映射列表，用于 PR 合并提醒时 @ PR 作者。用户名匹配不区分大小写。
 - `global_templates`：全局默认消息模板，支持 `star`、`release`、`issue`、`pr_opened`、`pr_merged`。
-- `subscriptions`：订阅列表。每条订阅包含目标会话 `target_umo`、仓库 `repo`、订阅创建时间 `created_at`、启用状态、事件开关、轮询间隔和 `template_overrides`。
+- `subscriptions`：订阅列表。每条订阅包含目标会话 `target_umo`、仓库 `repo`、管理员 QQ 号 `admin_qq_uid`、订阅创建时间 `created_at`、启用状态、事件开关、轮询间隔和 `template_overrides`。
 
 单条订阅的 `template_overrides` 留空时使用 `global_templates`；填写后只覆盖当前订阅，不影响其他群聊或私聊。
+
+升级后，旧订阅中的 `events.pr` 会自动迁移为同值的 `events.pr_opened` 和 `events.pr_merged`。在订阅项填写 `admin_qq_uid` 后，将 `{admin_mention}` 放入任一全局模板或当前订阅的模板覆盖，即可在该位置 @ 管理员；模板未使用此占位符时不会 @。
 
 ## 模板占位符
 
@@ -59,6 +62,7 @@
 - `{repo_url}`：仓库 GitHub 链接
 - `{owner}`：仓库 owner
 - `{repo_name}`：仓库名称
+- `{admin_mention}`：当前订阅配置了 `admin_qq_uid` 时，在占位符位置插入管理员 At 组件；未配置时为空。所有事件模板均可使用
 
 `star` 可使用：
 
@@ -88,11 +92,11 @@
 
 - `{merged_by}`：合并者 GitHub 用户名
 - `{merged_at}`：合并时间，默认上海时间，格式 `YYYY-MM-DD HH:MM:SS`
-- `{mention}`：命中 `github_to_qq` 映射时用于给 At 组件预留位置；未命中时为空
+- `{mention}`：命中 `github_to_qq` 映射时，在占位符位置插入 PR 作者 At 组件；未命中时为空
 
 ## 限流与发送
 
-- 插件内部每 60 秒唤醒一次，但每个订阅项的 Star、Release、Issue、PR 会分别按各自配置的检查间隔判断是否需要请求 GitHub。
+- 插件内部每 60 秒唤醒一次，但每个订阅项的 Star、Release、Issue、新 PR、PR 合并会分别判断是否需要请求 GitHub；两类 PR 事件共用 `pr_minutes` 检查间隔。
 - Issue 和 PR 每类事件每轮最多展示 `max_items_per_event_cycle` 条。
 - 超过展示上限的 Issue 或 PR 会发送 summary，超出部分会标记为已处理，后续不会补发。
 - Release 每轮只发送最新 1 个；同一轮发现的较旧 Release 会标记为已处理，后续不会补发。
@@ -105,7 +109,7 @@
 
 如果通过 WebUI 手动添加订阅且没有填写 `created_at`，首次轮询会以当时仓库状态建立 baseline，不发送此前已有事件。
 
-如果某个事件原本关闭，后续再开启，也不会把关闭期间或历史已有的事件刷出来；插件会以已记录状态为准继续提醒新事件。
+如果某个事件原本关闭，后续再开启，也不会把关闭期间或历史已有的事件刷出来；插件会以已记录状态为准继续提醒新事件。新 PR 与 PR 合并开关各自维护启用状态和去重记录。
 
 ## 注意事项
 

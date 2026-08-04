@@ -43,3 +43,15 @@ def test_github_to_qq_schema_is_template_list():
     mapping_template = schema["github_to_qq"]["templates"]["mapping"]
     assert mapping_template["items"]["github_login"]["type"] == "string"
     assert mapping_template["items"]["qq_uid"]["type"] == "string"
+
+
+def test_subscription_schema_splits_pr_switches_and_supports_admin_mention():
+    schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
+    items = schema["subscriptions"]["templates"]["subscription"]["items"]
+
+    assert items["admin_qq_uid"]["type"] == "string"
+    assert "{admin_mention}" in items["admin_qq_uid"]["hint"]
+    event_items = items["events"]["items"]
+    assert "pr" not in event_items
+    assert event_items["pr_opened"]["default"] is True
+    assert event_items["pr_merged"]["default"] is True

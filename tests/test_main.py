@@ -244,6 +244,67 @@ def test_plugin_migrates_legacy_github_to_qq_dict_for_webui(monkeypatch, tmp_pat
     assert config.save_count == 1
 
 
+def test_plugin_migrates_legacy_pr_switch_for_webui(monkeypatch, tmp_path):
+    plugin_data_path = tmp_path / "plugin_data"
+    module = install_astrbot_stubs(monkeypatch, plugin_data_path)
+    monkeypatch.chdir(tmp_path)
+    config = module.AstrBotConfig(
+        {
+            "subscriptions": [
+                {
+                    "target_umo": "umo-a",
+                    "repo": "Owner/Repo",
+                    "events": {"pr": True},
+                }
+            ]
+        }
+    )
+
+    plugin = module.GitHubSubscriberPlugin(module.Context(), config)
+
+    sub = plugin.normalized_config["subscriptions"][0]
+    assert sub["events"] == {"pr_opened": True, "pr_merged": True}
+    assert sub["admin_qq_uid"] == ""
+    assert config["subscriptions"] == plugin.normalized_config["subscriptions"]
+    assert config.save_count == 1
+
+
+def test_admin_mention_placeholder_inserts_at_component(monkeypatch):
+    module = install_astrbot_stubs(monkeypatch)
+    config = {
+        "global_templates": {
+            "issue": "Before {admin_mention}after {title}",
+        }
+    }
+    sub = {"admin_qq_uid": "20002", "template_overrides": {}}
+    message = {
+        "template_name": "issue",
+        "variables": {"title": "Hello"},
+        "mention_qq": "",
+    }
+
+    chain = module._build_subscription_message_chain(config, sub, message)
+
+    assert chain.chain[0].text == "Before "
+    assert chain.chain[1].qq == "20002"
+    assert chain.chain[2].text == " after Hello"
+
+
+def test_admin_qq_does_not_mention_without_placeholder(monkeypatch):
+    module = install_astrbot_stubs(monkeypatch)
+    config = {"global_templates": {"issue": "Issue {title}"}}
+    sub = {"admin_qq_uid": "20002", "template_overrides": {}}
+    message = {
+        "template_name": "issue",
+        "variables": {"title": "Hello"},
+        "mention_qq": "",
+    }
+
+    chain = module._build_subscription_message_chain(config, sub, message)
+
+    assert chain.chain == ["Issue Hello"]
+
+
 async def test_ghsub_add_persists_subscription_and_reports_defaults(monkeypatch, tmp_path):
     module = install_astrbot_stubs(monkeypatch)
     monkeypatch.chdir(tmp_path)
@@ -266,17 +327,19 @@ async def test_ghsub_add_persists_subscription_and_reports_defaults(monkeypatch,
     assert plugin.normalized_config["subscriptions"][0]["target_umo"] == event.unified_msg_origin
     assert plugin.normalized_config["subscriptions"][0]["target_name"] == "测试群"
     assert plugin.normalized_config["subscriptions"][0]["repo"] == "JunieXD/AutoEmailSender"
+    assert plugin.normalized_config["subscriptions"][0]["admin_qq_uid"] == ""
     assert plugin.normalized_config["subscriptions"][0]["events"] == {
         "star": False,
         "release": True,
         "issue": True,
-        "pr": True,
+        "pr_opened": True,
+        "pr_merged": True,
     }
     assert config["subscriptions"] == plugin.normalized_config["subscriptions"]
     assert config["github_to_qq"] == github_to_qq
     assert replies == [
         "已订阅 JunieXD/AutoEmailSender\n"
-        "已开启：Release、Issue、PR\n"
+        "已开启：Release、Issue、新 PR、PR 合并\n"
         "未开启：Star\n"
         "可使用 /ghsub enable JunieXD/AutoEmailSender star 开启 Star 提醒"
     ]
@@ -367,7 +430,10 @@ async def test_ghsub_list_only_lists_current_target(monkeypatch, tmp_path):
 
     replies = await collect_plain_result(plugin.ghsub_list(FakeEvent("umo-a")))
 
-    assert replies == ["当前 GitHub 订阅：\n- Owner/Repo：release, issue, pr"]
+    assert replies == [
+        "当前 GitHub 订阅：\n"
+        "- Owner/Repo：release, issue, pr_opened, pr_merged"
+    ]
 
 
 async def test_ghsub_enable_and_disable_persist_config(monkeypatch, tmp_path):
@@ -420,7 +486,10 @@ async def test_unknown_event_errors_are_reported_without_persisting(monkeypatch,
     enabled = await collect_plain_result(plugin.ghsub_enable(event, "Owner/Repo", "fork"))
     disabled = await collect_plain_result(plugin.ghsub_disable(event, "Owner/Repo", "fork"))
 
-    expected = "未知事件类型：fork。支持：star、release、issue、pr、all"
+    expected = (
+        "未知事件类型：fork。支持："
+        "star、release、issue、pr_opened、pr_merged、pr、all"
+    )
     assert enabled == [expected]
     assert disabled == [expected]
     assert config.save_count == 0
